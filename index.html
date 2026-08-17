@@ -735,8 +735,17 @@ function runCheck() {
 
   renderResults("frzPanel", "frzList", "frzCount", normalResults);
   renderResults("nsaPanel", "nsaList", "nsaCount", nsaResults);
-  renderMap(refLat, refLon, normalResults, nsaResults);
   buildCopyLists(normalResults, nsaResults);
+
+  // the map goes last and is wrapped up safely - if anything goes wrong
+  // drawing it, the results and copy lists above must still work
+  try {
+    renderMap(refLat, refLon, normalResults, nsaResults);
+  } catch (error) {
+    console.error("could not draw the map:", error);
+    var mapStatus = document.getElementById("statusLine");
+    mapStatus.textContent = "Results found, but the map could not be drawn. See the lists below.";
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -855,7 +864,11 @@ function initMap() {
 // the map - reference point, 50km radius, and the zone shapes themselves
 // ---------------------------------------------------------------------------
 function renderMap(refLat, refLon, normalResults, nsaResults) {
-  // map is already created and visible from page load - see initMap()
+  // if the map failed to start up there's nothing to draw on
+  if (map === null) {
+    console.warn("no map to draw on - initMap() must have failed");
+    return;
+  }
 
   // clear anything drawn by a previous search. wrapped in a try in case
   // a layer has already gone - a failed removal shouldn't stop the
@@ -936,11 +949,18 @@ function renderMap(refLat, refLon, normalResults, nsaResults) {
     k = k + 1;
   }
 
-  // zoom to fit the reference point and the radius circle
-  map.fitBounds(radiusCircle.getBounds(), { padding: [20, 20] });
+  // zoom to fit the search radius.
+  //
+  // NOTE: do NOT use radiusCircle.getBounds() here. leaflet works that
+  // out from the circle's projected pixel position, so it only works
+  // once the circle has been drawn onto a laid-out map - if the map
+  // isn't ready it throws "cannot read properties of undefined
+  // (reading 'layerPointToLatLng')". working the bounds out straight
+  // from the coordinates avoids depending on the map's state at all.
+  var searchBounds = L.latLng(refLat, refLon).toBounds(RADIUS_KM * 2 * 1000);
+  map.fitBounds(searchBounds, { padding: [20, 20] });
 
-  // leaflet sometimes needs a nudge to size itself correctly if the
-  // map div was hidden (display:none) when the map was first created
+  // leaflet sometimes needs a nudge to size itself correctly
   setTimeout(function () { map.invalidateSize(); }, 100);
 }
 
@@ -1046,7 +1066,14 @@ while (b < copyButtons.length) {
 }
 
 loadData();
-initMap();
+
+// the map is a nice-to-have - if it fails, everything else must
+// still work, so it's kept separate from the main page setup
+try {
+  initMap();
+} catch (error) {
+  console.error("could not start the map:", error);
+}
 </script>
 
 </body>
