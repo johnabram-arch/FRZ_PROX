@@ -300,6 +300,61 @@
     border: 1.5px solid var(--rule);
   }
 
+  .copy-intro {
+    font-size: 13px;
+    color: var(--ink-soft);
+    margin: 0 0 18px;
+  }
+
+  .copy-block { margin-bottom: 18px; }
+  .copy-block:last-child { margin-bottom: 0; }
+
+  .copy-head {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    margin-bottom: 6px;
+  }
+
+  .copy-label {
+    font-family: 'IBM Plex Mono', monospace;
+    font-size: 11px;
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
+    color: var(--ink-soft);
+  }
+
+  .btn-copy {
+    background: transparent;
+    border: 1.5px solid var(--rule);
+    color: var(--ink);
+    font-size: 12px;
+    font-weight: 600;
+    padding: 5px 12px;
+    border-radius: 3px;
+  }
+  .btn-copy:hover { border-color: var(--ink); }
+  .btn-copy.copied {
+    background: var(--clear);
+    border-color: var(--clear);
+    color: #fff;
+  }
+
+  .copy-text {
+    width: 100%;
+    font-family: 'IBM Plex Mono', monospace;
+    font-size: 12px;
+    line-height: 1.6;
+    padding: 10px 12px;
+    border: 1px solid var(--rule-soft);
+    border-radius: 4px;
+    background: #fff;
+    color: var(--ink);
+    resize: vertical;
+    white-space: pre;
+    overflow-x: auto;
+  }
+
   .leaflet-popup-content-wrapper {
     font-family: 'Inter', sans-serif;
     border-radius: 4px;
@@ -356,9 +411,38 @@
     <p class="status-line" id="statusLine"></p>
   </div>
 
-  <div class="panel" id="mapPanel" style="display:none;">
+  <div class="panel" id="mapPanel">
     <h2>Map</h2>
     <div id="map"></div>
+  </div>
+
+  <div class="panel" id="copyPanel" style="display:none;">
+    <h2>Copy lists</h2>
+    <p class="copy-intro">Three ready-made lists covering every FRZ and NSA found. Click to copy, then paste straight into a document.</p>
+
+    <div class="copy-block">
+      <div class="copy-head">
+        <span class="copy-label">1 &middot; Names only</span>
+        <button class="btn-copy" data-target="copyText1">Copy</button>
+      </div>
+      <textarea class="copy-text" id="copyText1" readonly rows="5"></textarea>
+    </div>
+
+    <div class="copy-block">
+      <div class="copy-head">
+        <span class="copy-label">2 &middot; Names + phone numbers</span>
+        <button class="btn-copy" data-target="copyText2">Copy</button>
+      </div>
+      <textarea class="copy-text" id="copyText2" readonly rows="5"></textarea>
+    </div>
+
+    <div class="copy-block">
+      <div class="copy-head">
+        <span class="copy-label">3 &middot; Names + distance and bearing</span>
+        <button class="btn-copy" data-target="copyText3">Copy</button>
+      </div>
+      <textarea class="copy-text" id="copyText3" readonly rows="5"></textarea>
+    </div>
   </div>
 
   <div class="panel results" id="frzPanel" style="display:none;">
@@ -652,27 +736,137 @@ function runCheck() {
   renderResults("frzPanel", "frzList", "frzCount", normalResults);
   renderResults("nsaPanel", "nsaList", "nsaCount", nsaResults);
   renderMap(refLat, refLon, normalResults, nsaResults);
+  buildCopyLists(normalResults, nsaResults);
+}
+
+// ---------------------------------------------------------------------------
+// the three copy-and-paste lists
+// ---------------------------------------------------------------------------
+function buildCopyLists(normalResults, nsaResults) {
+  // both lists together, closest first - the copy lists cover everything
+  var everything = normalResults.concat(nsaResults);
+  everything.sort(function (a, b) { return a.dist - b.dist; });
+
+  var list1 = [];  // just the name (which already starts with the frz number)
+  var list2 = [];  // name + phone number
+  var list3 = [];  // name + distance and bearing
+
+  var i = 0;
+  while (i < everything.length) {
+    var r = everything[i];
+
+    list1.push(r.name);
+
+    var phone = r.phone;
+    if (phone === "No number available." || phone === "") {
+      phone = "no number available";
+    }
+    list2.push(r.name + "  -  " + phone);
+
+    if (r.inside) {
+      list3.push(r.name + "  -  INSIDE THIS ZONE");
+    } else {
+      var kmText = r.dist.toFixed(1) + " km";
+      var bearingText = String(Math.round(r.bearing) % 360).padStart(3, "0") + " deg";
+      list3.push(r.name + "  -  " + kmText + "  -  " + bearingText);
+    }
+
+    i = i + 1;
+  }
+
+  document.getElementById("copyText1").value = list1.join("\n");
+  document.getElementById("copyText2").value = list2.join("\n");
+  document.getElementById("copyText3").value = list3.join("\n");
+
+  document.getElementById("copyPanel").style.display = "block";
+}
+
+// copies one of the boxes to the clipboard
+function copyBox(textareaId, button) {
+  var textarea = document.getElementById(textareaId);
+
+  // the modern clipboard api needs https - fall back to the old
+  // select-and-copy method if it isn't available (e.g. opened as a
+  // local file rather than served over https)
+  if (navigator.clipboard && window.isSecureContext) {
+    navigator.clipboard.writeText(textarea.value).then(function () {
+      showCopied(button);
+    });
+  } else {
+    textarea.select();
+    document.execCommand("copy");
+    showCopied(button);
+  }
+}
+
+function showCopied(button) {
+  var originalText = button.textContent;
+  button.textContent = "Copied";
+  button.className = "btn-copy copied";
+
+  setTimeout(function () {
+    button.textContent = originalText;
+    button.className = "btn-copy";
+  }, 1500);
+}
+
+// creates the map straight away on page load, so it's never created
+// while its container is hidden - a hidden container at creation time
+// is the classic cause of leaflet showing grey tiles that never fix
+// themselves, even after the container becomes visible later
+function initMap() {
+  map = L.map("map").setView([54.5, -3.5], 6);  // rough centre of the UK
+
+  // CARTO's basemap - served from a fast CDN and works reliably on
+  // most networks. it's still OpenStreetMap data underneath
+  var tiles = L.tileLayer(
+    "https://basemaps.cartocdn.com/light_all/{z}/{x}/{y}.png",
+    {
+      attribution: "&copy; OpenStreetMap contributors &copy; CARTO",
+      maxZoom: 19
+    }
+  );
+
+  // if lots of tiles fail we just say so - we do NOT swap the layer
+  // out, because removing a layer while tiles are still loading makes
+  // leaflet throw errors about its own internal state
+  var errorCount = 0;
+  var warned = false;
+
+  tiles.on("tileerror", function () {
+    errorCount = errorCount + 1;
+
+    if (errorCount > 4 && warned === false) {
+      warned = true;
+      var status = document.getElementById("statusLine");
+      status.textContent = "Map tiles aren't loading - the network may be blocking map servers. The FRZ results below still work normally.";
+      status.className = "status-line error";
+    }
+  });
+
+  tiles.addTo(map);
+
+  // make sure leaflet has measured the container correctly once the
+  // page has finished laying everything out
+  setTimeout(function () { map.invalidateSize(); }, 200);
 }
 
 // ---------------------------------------------------------------------------
 // the map - reference point, 50km radius, and the zone shapes themselves
 // ---------------------------------------------------------------------------
 function renderMap(refLat, refLon, normalResults, nsaResults) {
-  document.getElementById("mapPanel").style.display = "block";
+  // map is already created and visible from page load - see initMap()
 
-  // create the map once, the first time we need it
-  if (map === null) {
-    map = L.map("map");
-    L.tileLayer("https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png", {
-      attribution: "&copy; OpenStreetMap contributors",
-      maxZoom: 18
-    }).addTo(map);
-  }
-
-  // clear anything drawn from a previous search
+  // clear anything drawn by a previous search. wrapped in a try in case
+  // a layer has already gone - a failed removal shouldn't stop the
+  // rest of the map being drawn
   var i = 0;
   while (i < mapLayers.length) {
-    map.removeLayer(mapLayers[i]);
+    try {
+      map.removeLayer(mapLayers[i]);
+    } catch (error) {
+      console.warn("could not remove an old map layer:", error);
+    }
     i = i + 1;
   }
   mapLayers = [];
@@ -841,7 +1035,18 @@ document.getElementById("coordsInput").addEventListener("keydown", function (e) 
   if (e.key === "Enter") runCheck();
 });
 
+// wire up all three copy buttons
+var copyButtons = document.querySelectorAll(".btn-copy");
+var b = 0;
+while (b < copyButtons.length) {
+  copyButtons[b].addEventListener("click", function () {
+    copyBox(this.getAttribute("data-target"), this);
+  });
+  b = b + 1;
+}
+
 loadData();
+initMap();
 </script>
 
 </body>
