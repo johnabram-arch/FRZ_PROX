@@ -6,6 +6,7 @@
 <title>FRZ Proximity Checker</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,400;9..144,600;9..144,700&family=IBM+Plex+Mono:wght@400;500;600&family=Inter:wght@400;500;600&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css">
 <style>
   :root {
     --paper: #F4EFE1;
@@ -292,6 +293,27 @@
     font-style: italic;
   }
 
+  #map {
+    height: 440px;
+    width: 100%;
+    border-radius: 4px;
+    border: 1.5px solid var(--rule);
+  }
+
+  .leaflet-popup-content-wrapper {
+    font-family: 'Inter', sans-serif;
+    border-radius: 4px;
+  }
+  .leaflet-popup-content b {
+    font-family: 'Fraunces', serif;
+  }
+  .map-popup-phone {
+    font-family: 'IBM Plex Mono', monospace;
+    font-size: 12px;
+    color: var(--ink-soft);
+    margin-top: 4px;
+  }
+
   footer {
     margin-top: 30px;
     font-size: 12px;
@@ -325,17 +347,18 @@
     <h2>Reference Point</h2>
     <div class="input-row">
       <div class="field">
-        <label for="latInput">Latitude</label>
-        <input type="text" id="latInput" placeholder="e.g. 51.4700">
-      </div>
-      <div class="field">
-        <label for="lonInput">Longitude</label>
-        <input type="text" id="lonInput" placeholder="e.g. -0.4543">
+        <label for="coordsInput">Coordinates (lat, long)</label>
+        <input type="text" id="coordsInput" placeholder="e.g. 51.219004, -0.147814">
       </div>
       <button class="btn-secondary" id="locateBtn">Use my location</button>
       <button class="btn-primary" id="checkBtn">Check</button>
     </div>
     <p class="status-line" id="statusLine"></p>
+  </div>
+
+  <div class="panel" id="mapPanel" style="display:none;">
+    <h2>Map</h2>
+    <div id="map"></div>
   </div>
 
   <div class="panel results" id="frzPanel" style="display:none;">
@@ -354,6 +377,7 @@
 
 </div>
 
+<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
 <script>
 // ---------------------------------------------------------------------------
 // settings
@@ -362,6 +386,10 @@ var DATA_FILE = "frz_data.json";
 var RADIUS_KM = 50;
 
 var allZones = [];
+
+// the leaflet map - created the first time we need it, then reused
+var map = null;
+var mapLayers = [];  // everything we've drawn, so we can clear it before redrawing
 
 // ---------------------------------------------------------------------------
 // load the data file as soon as the page opens
@@ -528,14 +556,20 @@ function runCheck() {
   var status = document.getElementById("statusLine");
   status.className = "status-line";
 
-  var latText = document.getElementById("latInput").value.trim();
-  var lonText = document.getElementById("lonInput").value.trim();
+  var coordsText = document.getElementById("coordsInput").value.trim();
+  var coordsParts = coordsText.split(",");
 
-  var refLat = parseFloat(latText);
-  var refLon = parseFloat(lonText);
+  if (coordsParts.length < 2) {
+    status.textContent = "Enter coordinates as: latitude, longitude - e.g. 51.219004, -0.147814";
+    status.className = "status-line error";
+    return;
+  }
+
+  var refLat = parseFloat(coordsParts[0].trim());
+  var refLon = parseFloat(coordsParts[1].trim());
 
   if (isNaN(refLat) || isNaN(refLon)) {
-    status.textContent = "Enter both a latitude and a longitude first.";
+    status.textContent = "Couldn't read those coordinates - check the format: 51.219004, -0.147814";
     status.className = "status-line error";
     return;
   }
@@ -566,7 +600,7 @@ function runCheck() {
     var inside = pointInRing(ringXY);
 
     if (inside) {
-      results.push({ dist: 0, bearing: 0, name: zone.name, phone: zone.phone, inside: true });
+      results.push({ dist: 0, bearing: 0, name: zone.name, phone: zone.phone, inside: true, ring: zone.ring });
     } else {
       var nearest = nearestPointOnRing(ringXY);
       var distM = nearest[0];
@@ -576,7 +610,7 @@ function runCheck() {
 
       if (distKm <= RADIUS_KM) {
         var bearing = bearingOf(cx, cy);
-        results.push({ dist: distKm, bearing: bearing, name: zone.name, phone: zone.phone, inside: false });
+        results.push({ dist: distKm, bearing: bearing, name: zone.name, phone: zone.phone, inside: false, ring: zone.ring });
       }
     }
 
@@ -617,6 +651,103 @@ function runCheck() {
 
   renderResults("frzPanel", "frzList", "frzCount", normalResults);
   renderResults("nsaPanel", "nsaList", "nsaCount", nsaResults);
+  renderMap(refLat, refLon, normalResults, nsaResults);
+}
+
+// ---------------------------------------------------------------------------
+// the map - reference point, 50km radius, and the zone shapes themselves
+// ---------------------------------------------------------------------------
+function renderMap(refLat, refLon, normalResults, nsaResults) {
+  document.getElementById("mapPanel").style.display = "block";
+
+  // create the map once, the first time we need it
+  if (map === null) {
+    map = L.map("map");
+    L.tileLayer("https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png", {
+      attribution: "&copy; OpenStreetMap contributors",
+      maxZoom: 18
+    }).addTo(map);
+  }
+
+  // clear anything drawn from a previous search
+  var i = 0;
+  while (i < mapLayers.length) {
+    map.removeLayer(mapLayers[i]);
+    i = i + 1;
+  }
+  mapLayers = [];
+
+  // the reference point itself
+  var refMarker = L.marker([refLat, refLon]).addTo(map);
+  refMarker.bindPopup("<b>Reference point</b><br>" + refLat.toFixed(5) + ", " + refLon.toFixed(5));
+  mapLayers.push(refMarker);
+
+  // the 50km search radius
+  var radiusCircle = L.circle([refLat, refLon], {
+    radius: RADIUS_KM * 1000,
+    color: "#1B2A4A",
+    weight: 1.5,
+    fillOpacity: 0,
+    dashArray: "6 6"
+  }).addTo(map);
+  mapLayers.push(radiusCircle);
+
+  // draws one zone's shape onto the map
+  function drawZone(result, isNsa) {
+    if (!result.ring || result.ring.length === 0) {
+      return;
+    }
+
+    // the ring is stored as [lon, lat] pairs - leaflet wants [lat, lon]
+    var latLngs = [];
+    var j = 0;
+    while (j < result.ring.length) {
+      var lon = result.ring[j][0];
+      var lat = result.ring[j][1];
+      latLngs.push([lat, lon]);
+      j = j + 1;
+    }
+
+    var fillColor = isNsa ? "#4A5A78" : "#C81E4B";
+    if (result.inside) {
+      fillColor = "#C81E4B";
+    }
+
+    var polygon = L.polygon(latLngs, {
+      color: fillColor,
+      weight: result.inside ? 2.5 : 1.5,
+      fillOpacity: result.inside ? 0.35 : 0.15
+    }).addTo(map);
+
+    var popupText = "<b>" + result.name + "</b><br>";
+    if (result.inside) {
+      popupText = popupText + "<span style='color:#C81E4B; font-weight:600;'>Reference point is inside this zone</span><br>";
+    } else {
+      popupText = popupText + result.dist.toFixed(1) + " km away<br>";
+    }
+    popupText = popupText + "<div class='map-popup-phone'>" + result.phone + "</div>";
+
+    polygon.bindPopup(popupText);
+    mapLayers.push(polygon);
+  }
+
+  var k = 0;
+  while (k < normalResults.length) {
+    drawZone(normalResults[k], false);
+    k = k + 1;
+  }
+  k = 0;
+  while (k < nsaResults.length) {
+    drawZone(nsaResults[k], true);
+    k = k + 1;
+  }
+
+  // zoom to fit the reference point and the radius circle
+  map.fitBounds(radiusCircle.getBounds(), { padding: [20, 20] });
+
+  // leaflet sometimes needs a nudge to size itself correctly if the
+  // map div was hidden (display:none) when the map was first created
+  setTimeout(function () { map.invalidateSize(); }, 100);
 }
 
 function renderResults(panelId, listId, countId, results) {
@@ -689,8 +820,9 @@ function useMyLocation() {
 
   navigator.geolocation.getCurrentPosition(
     function (position) {
-      document.getElementById("latInput").value = position.coords.latitude.toFixed(5);
-      document.getElementById("lonInput").value = position.coords.longitude.toFixed(5);
+      var lat = position.coords.latitude.toFixed(5);
+      var lon = position.coords.longitude.toFixed(5);
+      document.getElementById("coordsInput").value = lat + ", " + lon;
       status.textContent = "Location found. Click Check to search.";
     },
     function (error) {
@@ -705,10 +837,7 @@ function useMyLocation() {
 // ---------------------------------------------------------------------------
 document.getElementById("checkBtn").addEventListener("click", runCheck);
 document.getElementById("locateBtn").addEventListener("click", useMyLocation);
-document.getElementById("latInput").addEventListener("keydown", function (e) {
-  if (e.key === "Enter") runCheck();
-});
-document.getElementById("lonInput").addEventListener("keydown", function (e) {
+document.getElementById("coordsInput").addEventListener("keydown", function (e) {
   if (e.key === "Enter") runCheck();
 });
 
