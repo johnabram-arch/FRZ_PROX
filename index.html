@@ -1,0 +1,719 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>FRZ Proximity Checker</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,400;9..144,600;9..144,700&family=IBM+Plex+Mono:wght@400;500;600&family=Inter:wght@400;500;600&display=swap" rel="stylesheet">
+<style>
+  :root {
+    --paper: #F4EFE1;
+    --paper-raised: #FBF8F0;
+    --ink: #1B2A4A;
+    --ink-soft: #4A5A78;
+    --restricted: #C81E4B;
+    --restricted-soft: #FBE4EA;
+    --clear: #2E7D6B;
+    --clear-soft: #E3EFEA;
+    --rule: #8B7F6B;
+    --rule-soft: #D9D2BF;
+  }
+
+  * { box-sizing: border-box; }
+
+  body {
+    margin: 0;
+    background: var(--paper);
+    background-image:
+      repeating-linear-gradient(0deg, transparent, transparent 39px, rgba(139,127,107,0.07) 40px),
+      repeating-linear-gradient(90deg, transparent, transparent 39px, rgba(139,127,107,0.07) 40px);
+    color: var(--ink);
+    font-family: 'Inter', sans-serif;
+    min-height: 100vh;
+  }
+
+  .wrap {
+    max-width: 880px;
+    margin: 0 auto;
+    padding: 32px 20px 80px;
+  }
+
+  header {
+    border-bottom: 3px solid var(--ink);
+    padding-bottom: 20px;
+    margin-bottom: 24px;
+  }
+
+  .eyebrow {
+    font-family: 'IBM Plex Mono', monospace;
+    font-size: 12px;
+    letter-spacing: 0.12em;
+    text-transform: uppercase;
+    color: var(--ink-soft);
+    margin: 0 0 6px;
+  }
+
+  h1 {
+    font-family: 'Fraunces', serif;
+    font-size: clamp(32px, 5vw, 46px);
+    font-weight: 700;
+    margin: 0 0 8px;
+    line-height: 1.05;
+  }
+
+  .subtitle {
+    font-size: 15px;
+    color: var(--ink-soft);
+    max-width: 60ch;
+    margin: 0;
+  }
+
+  .meta-row {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 10px;
+    margin-top: 16px;
+  }
+
+  .chip {
+    font-family: 'IBM Plex Mono', monospace;
+    font-size: 12px;
+    padding: 5px 10px;
+    border: 1px solid var(--rule);
+    border-radius: 3px;
+    color: var(--ink-soft);
+    background: var(--paper-raised);
+  }
+
+  .disclaimer {
+    margin-top: 20px;
+    padding: 14px 16px;
+    background: var(--restricted-soft);
+    border-left: 3px solid var(--restricted);
+    font-size: 13px;
+    line-height: 1.5;
+    color: var(--ink);
+    border-radius: 0 3px 3px 0;
+  }
+
+  .disclaimer strong { color: var(--restricted); }
+
+  .panel {
+    background: var(--paper-raised);
+    border: 1px solid var(--rule-soft);
+    border-radius: 6px;
+    padding: 24px;
+    margin-bottom: 20px;
+  }
+
+  .panel h2 {
+    font-family: 'Fraunces', serif;
+    font-size: 15px;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.08em;
+    margin: 0 0 16px;
+    color: var(--ink-soft);
+  }
+
+  .input-row {
+    display: flex;
+    gap: 12px;
+    flex-wrap: wrap;
+    align-items: flex-end;
+  }
+
+  .field {
+    flex: 1;
+    min-width: 160px;
+  }
+
+  label {
+    display: block;
+    font-family: 'IBM Plex Mono', monospace;
+    font-size: 11px;
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
+    color: var(--ink-soft);
+    margin-bottom: 6px;
+  }
+
+  input[type="text"] {
+    width: 100%;
+    font-family: 'IBM Plex Mono', monospace;
+    font-size: 15px;
+    padding: 10px 12px;
+    border: 1.5px solid var(--rule);
+    border-radius: 4px;
+    background: #fff;
+    color: var(--ink);
+  }
+
+  input[type="text"]:focus {
+    outline: 2px solid var(--ink);
+    outline-offset: 1px;
+  }
+
+  button {
+    font-family: 'Inter', sans-serif;
+    font-weight: 600;
+    font-size: 14px;
+    padding: 11px 20px;
+    border-radius: 4px;
+    border: none;
+    cursor: pointer;
+    white-space: nowrap;
+  }
+
+  .btn-primary {
+    background: var(--ink);
+    color: var(--paper);
+  }
+  .btn-primary:hover { background: #2a3d63; }
+  .btn-primary:disabled { background: var(--rule); cursor: not-allowed; }
+
+  .btn-secondary {
+    background: transparent;
+    color: var(--ink);
+    border: 1.5px solid var(--rule);
+  }
+  .btn-secondary:hover { border-color: var(--ink); }
+
+  .status-line {
+    margin-top: 14px;
+    font-family: 'IBM Plex Mono', monospace;
+    font-size: 13px;
+    color: var(--ink-soft);
+    min-height: 18px;
+  }
+  .status-line.error { color: var(--restricted); }
+
+  .results h2 .count {
+    font-family: 'IBM Plex Mono', monospace;
+    font-weight: 400;
+    color: var(--rule);
+  }
+
+  .zone-row {
+    display: grid;
+    grid-template-columns: 44px 1fr auto;
+    gap: 14px;
+    align-items: center;
+    padding: 14px 0;
+    border-bottom: 1px solid var(--rule-soft);
+  }
+  .zone-row:last-child { border-bottom: none; }
+
+  .zone-row.inside {
+    background: var(--restricted-soft);
+    margin: 0 -12px;
+    padding: 14px 12px;
+    border-radius: 4px;
+    border-bottom: none;
+  }
+
+  .compass {
+    width: 40px;
+    height: 40px;
+    border-radius: 50%;
+    border: 1.5px solid var(--rule);
+    position: relative;
+    flex-shrink: 0;
+    background: #fff;
+  }
+  .compass .needle {
+    position: absolute;
+    top: 50%;
+    left: 50%;
+    width: 2px;
+    height: 15px;
+    background: var(--ink);
+    transform-origin: bottom center;
+    margin-left: -1px;
+    margin-top: -15px;
+    border-radius: 1px;
+  }
+  .compass .needle::after {
+    content: "";
+    position: absolute;
+    top: -3px;
+    left: -2px;
+    width: 0;
+    height: 0;
+    border-left: 3px solid transparent;
+    border-right: 3px solid transparent;
+    border-bottom: 5px solid var(--ink);
+  }
+  .compass.inside-marker {
+    background: var(--restricted);
+    border-color: var(--restricted);
+  }
+
+  .zone-name {
+    font-weight: 600;
+    font-size: 15px;
+  }
+
+  .zone-phone {
+    font-family: 'IBM Plex Mono', monospace;
+    font-size: 12.5px;
+    color: var(--ink-soft);
+    margin-top: 2px;
+  }
+
+  .zone-phone .no-number { color: var(--rule); font-style: italic; }
+
+  .zone-dist {
+    text-align: right;
+    font-family: 'IBM Plex Mono', monospace;
+    white-space: nowrap;
+  }
+
+  .zone-dist .km { font-size: 16px; font-weight: 600; }
+  .zone-dist .bearing { font-size: 12px; color: var(--ink-soft); display: block; }
+
+  .inside-tag {
+    display: inline-block;
+    background: var(--restricted);
+    color: #fff;
+    font-family: 'IBM Plex Mono', monospace;
+    font-size: 11px;
+    font-weight: 600;
+    letter-spacing: 0.05em;
+    padding: 3px 8px;
+    border-radius: 3px;
+    text-align: right;
+  }
+
+  .empty-note {
+    font-size: 13px;
+    color: var(--ink-soft);
+    font-style: italic;
+  }
+
+  footer {
+    margin-top: 30px;
+    font-size: 12px;
+    color: var(--ink-soft);
+    text-align: center;
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    * { transition: none !important; }
+  }
+</style>
+</head>
+<body>
+
+<div class="wrap">
+
+  <header>
+    <p class="eyebrow">UK Flight Restriction Zones</p>
+    <h1>FRZ Proximity Checker</h1>
+    <p class="subtitle">Enter a location to find nearby Flight Restriction Zones and Runway Protection Zones, with distance, bearing, and ATC contact numbers.</p>
+    <div class="meta-row">
+      <span class="chip" id="airacChip">AIRAC: loading…</span>
+      <span class="chip" id="zoneCountChip">Zones: loading…</span>
+    </div>
+    <div class="disclaimer">
+      <strong>Not for operational use.</strong> This tool is provided for planning convenience only. Always verify against the current UK AIP and NATS eAIP before flying. Data source and AIRAC date are shown above — check they're current.
+    </div>
+  </header>
+
+  <div class="panel">
+    <h2>Reference Point</h2>
+    <div class="input-row">
+      <div class="field">
+        <label for="latInput">Latitude</label>
+        <input type="text" id="latInput" placeholder="e.g. 51.4700">
+      </div>
+      <div class="field">
+        <label for="lonInput">Longitude</label>
+        <input type="text" id="lonInput" placeholder="e.g. -0.4543">
+      </div>
+      <button class="btn-secondary" id="locateBtn">Use my location</button>
+      <button class="btn-primary" id="checkBtn">Check</button>
+    </div>
+    <p class="status-line" id="statusLine"></p>
+  </div>
+
+  <div class="panel results" id="frzPanel" style="display:none;">
+    <h2>FRZs / RPZs within 50 km <span class="count" id="frzCount"></span></h2>
+    <div id="frzList"></div>
+  </div>
+
+  <div class="panel results" id="nsaPanel" style="display:none;">
+    <h2>NSAs — military / government / prison sites <span class="count" id="nsaCount"></span></h2>
+    <div id="nsaList"></div>
+  </div>
+
+  <footer>
+    Data: NATS UK Digital Datasets &amp; atcadvisor.com &middot; built for internal planning use
+  </footer>
+
+</div>
+
+<script>
+// ---------------------------------------------------------------------------
+// settings
+// ---------------------------------------------------------------------------
+var DATA_FILE = "frz_data.json";
+var RADIUS_KM = 50;
+
+var allZones = [];
+
+// ---------------------------------------------------------------------------
+// load the data file as soon as the page opens
+// ---------------------------------------------------------------------------
+function loadData() {
+  fetch(DATA_FILE)
+    .then(function (response) {
+      if (!response.ok) {
+        throw new Error("could not load " + DATA_FILE);
+      }
+      return response.json();
+    })
+    .then(function (data) {
+      allZones = data.zones;
+      document.getElementById("airacChip").textContent = "AIRAC: " + data.airac_date;
+      document.getElementById("zoneCountChip").textContent = "Zones: " + data.zone_count;
+    })
+    .catch(function (error) {
+      var status = document.getElementById("statusLine");
+      status.textContent = "Could not load " + DATA_FILE + " - make sure it's in the same folder as this page.";
+      status.className = "status-line error";
+      console.error(error);
+    });
+}
+
+// ---------------------------------------------------------------------------
+// geometry maths - same approach as the python version, ported to js
+// ---------------------------------------------------------------------------
+
+// turns lon/lat into a flat local x,y map (metres) centred on the
+// reference point. this is a simple flat-earth approximation - it's
+// accurate enough over the ~50km radius we care about here
+function toLocalXY(lon, lat, refLon, refLat) {
+  var metresPerDegreeLat = 110540;
+  var metresPerDegreeLon = 111320 * Math.cos(refLat * Math.PI / 180);
+
+  var x = (lon - refLon) * metresPerDegreeLon;
+  var y = (lat - refLat) * metresPerDegreeLat;
+
+  return [x, y];
+}
+
+// finds closest point to (0,0) on a line between a & b
+function closestPointOnSegment(px, py, ax, ay, bx, by) {
+  var abx = bx - ax;
+  var aby = by - ay;
+  var segLenSq = abx * abx + aby * aby;
+
+  if (segLenSq === 0) {
+    return [ax, ay];
+  }
+
+  var t = ((px - ax) * abx + (py - ay) * aby) / segLenSq;
+
+  if (t < 0) t = 0;
+  if (t > 1) t = 1;
+
+  var closestX = ax + t * abx;
+  var closestY = ay + t * aby;
+  return [closestX, closestY];
+}
+
+// checks every edge of polygon and keeps the one closest to (0,0)
+function nearestPointOnRing(ringXY) {
+  var bestDist = -1;
+  var bestX = 0;
+  var bestY = 0;
+
+  var i = 0;
+  while (i < ringXY.length - 1) {
+    var ax = ringXY[i][0];
+    var ay = ringXY[i][1];
+    var bx = ringXY[i + 1][0];
+    var by = ringXY[i + 1][1];
+
+    var closest = closestPointOnSegment(0, 0, ax, ay, bx, by);
+    var cx = closest[0];
+    var cy = closest[1];
+    var dist = Math.sqrt(cx * cx + cy * cy);
+
+    if (bestDist === -1 || dist < bestDist) {
+      bestDist = dist;
+      bestX = cx;
+      bestY = cy;
+    }
+
+    i = i + 1;
+  }
+
+  return [bestDist, bestX, bestY];
+}
+
+// is the reference point inside this zone. counts boundary crossings.
+// if even then outside, if odd then inside
+function pointInRing(ringXY) {
+  var px = 0;
+  var py = 0;
+
+  var crossingCount = 0;
+
+  var i = 0;
+  while (i < ringXY.length - 1) {
+    var ax = ringXY[i][0];
+    var ay = ringXY[i][1];
+    var bx = ringXY[i + 1][0];
+    var by = ringXY[i + 1][1];
+
+    var pointAAbove = ay > py;
+    var pointBAbove = by > py;
+
+    if (pointAAbove !== pointBAbove) {
+      var xCross = ax + (py - ay) * (bx - ax) / (by - ay);
+
+      if (xCross > px) {
+        crossingCount = crossingCount + 1;
+      }
+    }
+
+    i = i + 1;
+  }
+
+  return (crossingCount % 2) === 1;
+}
+
+// works out compass bearing from the reference point to (x,y)
+function bearingOf(x, y) {
+  var angleRadians = Math.atan2(x, y);
+  var angleDegrees = angleRadians * 180 / Math.PI;
+
+  angleDegrees = angleDegrees + 360;
+  if (angleDegrees >= 360) {
+    angleDegrees = angleDegrees - 360;
+  }
+
+  return angleDegrees;
+}
+
+// same trick as the python script - drops the RWY suffix so runway
+// entries for the same airfield get grouped together
+function getPlaceName(name) {
+  var words = name.split(" ");
+
+  if (words.length < 2) {
+    return name;
+  }
+
+  var rest = words.slice(1);
+  var rwyIndex = rest.indexOf("RWY");
+
+  var placeWords;
+  if (rwyIndex !== -1) {
+    placeWords = rest.slice(0, rwyIndex);
+  } else {
+    placeWords = rest;
+  }
+
+  return placeWords.join(" ");
+}
+
+// ---------------------------------------------------------------------------
+// the main search
+// ---------------------------------------------------------------------------
+function runCheck() {
+  var status = document.getElementById("statusLine");
+  status.className = "status-line";
+
+  var latText = document.getElementById("latInput").value.trim();
+  var lonText = document.getElementById("lonInput").value.trim();
+
+  var refLat = parseFloat(latText);
+  var refLon = parseFloat(lonText);
+
+  if (isNaN(refLat) || isNaN(refLon)) {
+    status.textContent = "Enter both a latitude and a longitude first.";
+    status.className = "status-line error";
+    return;
+  }
+
+  if (allZones.length === 0) {
+    status.textContent = DATA_FILE + " hasn't loaded yet - wait a moment and try again.";
+    status.className = "status-line error";
+    return;
+  }
+
+  status.textContent = "Checking " + allZones.length + " zones...";
+
+  var results = [];
+
+  var i = 0;
+  while (i < allZones.length) {
+    var zone = allZones[i];
+
+    var ringXY = [];
+    var j = 0;
+    while (j < zone.ring.length) {
+      var lon = zone.ring[j][0];
+      var lat = zone.ring[j][1];
+      ringXY.push(toLocalXY(lon, lat, refLon, refLat));
+      j = j + 1;
+    }
+
+    var inside = pointInRing(ringXY);
+
+    if (inside) {
+      results.push({ dist: 0, bearing: 0, name: zone.name, phone: zone.phone, inside: true });
+    } else {
+      var nearest = nearestPointOnRing(ringXY);
+      var distM = nearest[0];
+      var cx = nearest[1];
+      var cy = nearest[2];
+      var distKm = distM / 1000;
+
+      if (distKm <= RADIUS_KM) {
+        var bearing = bearingOf(cx, cy);
+        results.push({ dist: distKm, bearing: bearing, name: zone.name, phone: zone.phone, inside: false });
+      }
+    }
+
+    i = i + 1;
+  }
+
+  // keep only the closest entry per place (same airfield can have
+  // several runway-specific zones)
+  var bestByPlace = {};
+
+  i = 0;
+  while (i < results.length) {
+    var result = results[i];
+    var place = getPlaceName(result.name);
+
+    if (!(place in bestByPlace) || result.dist < bestByPlace[place].dist) {
+      bestByPlace[place] = result;
+    }
+
+    i = i + 1;
+  }
+
+  var normalResults = [];
+  var nsaResults = [];
+
+  for (var place in bestByPlace) {
+    if (place.indexOf("NSA") === 0) {
+      nsaResults.push(bestByPlace[place]);
+    } else {
+      normalResults.push(bestByPlace[place]);
+    }
+  }
+
+  normalResults.sort(function (a, b) { return a.dist - b.dist; });
+  nsaResults.sort(function (a, b) { return a.dist - b.dist; });
+
+  status.textContent = "Found " + normalResults.length + " FRZ/RPZ and " + nsaResults.length + " NSA within " + RADIUS_KM + " km.";
+
+  renderResults("frzPanel", "frzList", "frzCount", normalResults);
+  renderResults("nsaPanel", "nsaList", "nsaCount", nsaResults);
+}
+
+function renderResults(panelId, listId, countId, results) {
+  var panel = document.getElementById(panelId);
+  var list = document.getElementById(listId);
+  var countEl = document.getElementById(countId);
+
+  panel.style.display = "block";
+  countEl.textContent = "(" + results.length + ")";
+  list.innerHTML = "";
+
+  if (results.length === 0) {
+    list.innerHTML = '<p class="empty-note">None found within ' + RADIUS_KM + ' km.</p>';
+    return;
+  }
+
+  var i = 0;
+  while (i < results.length) {
+    var r = results[i];
+
+    var row = document.createElement("div");
+    row.className = "zone-row" + (r.inside ? " inside" : "");
+
+    var compassHTML;
+    if (r.inside) {
+      compassHTML = '<div class="compass inside-marker"></div>';
+    } else {
+      compassHTML = '<div class="compass"><div class="needle" style="transform: rotate(' + r.bearing + 'deg);"></div></div>';
+    }
+
+    var phoneHTML;
+    if (r.phone === "No number available." || r.phone === "") {
+      phoneHTML = '<span class="no-number">no number available</span>';
+    } else {
+      phoneHTML = r.phone;
+    }
+
+    var distHTML;
+    if (r.inside) {
+      distHTML = '<span class="inside-tag">INSIDE THIS ZONE</span>';
+    } else {
+      var kmText = r.dist.toFixed(1) + " km";
+      var bearingText = String(Math.round(r.bearing) % 360).padStart(3, "0") + "°";
+      distHTML = '<span class="km">' + kmText + '</span><span class="bearing">' + bearingText + '</span>';
+    }
+
+    row.innerHTML =
+      compassHTML +
+      '<div><div class="zone-name">' + r.name + '</div><div class="zone-phone">' + phoneHTML + '</div></div>' +
+      '<div class="zone-dist">' + distHTML + '</div>';
+
+    list.appendChild(row);
+    i = i + 1;
+  }
+}
+
+// ---------------------------------------------------------------------------
+// "use my location" button
+// ---------------------------------------------------------------------------
+function useMyLocation() {
+  var status = document.getElementById("statusLine");
+
+  if (!navigator.geolocation) {
+    status.textContent = "This browser doesn't support location lookup - enter coordinates manually.";
+    status.className = "status-line error";
+    return;
+  }
+
+  status.textContent = "Getting your location...";
+
+  navigator.geolocation.getCurrentPosition(
+    function (position) {
+      document.getElementById("latInput").value = position.coords.latitude.toFixed(5);
+      document.getElementById("lonInput").value = position.coords.longitude.toFixed(5);
+      status.textContent = "Location found. Click Check to search.";
+    },
+    function (error) {
+      status.textContent = "Couldn't get your location: " + error.message;
+      status.className = "status-line error";
+    }
+  );
+}
+
+// ---------------------------------------------------------------------------
+// wire everything up
+// ---------------------------------------------------------------------------
+document.getElementById("checkBtn").addEventListener("click", runCheck);
+document.getElementById("locateBtn").addEventListener("click", useMyLocation);
+document.getElementById("latInput").addEventListener("keydown", function (e) {
+  if (e.key === "Enter") runCheck();
+});
+document.getElementById("lonInput").addEventListener("keydown", function (e) {
+  if (e.key === "Enter") runCheck();
+});
+
+loadData();
+</script>
+
+</body>
+</html>
