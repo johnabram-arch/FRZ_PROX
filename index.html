@@ -100,6 +100,22 @@
 
   .disclaimer strong { color: var(--restricted); }
 
+  .stale-warning {
+    margin-top: 14px;
+    padding: 12px 16px;
+    background: var(--restricted);
+    color: #fff;
+    font-size: 13px;
+    font-weight: 600;
+    border-radius: 4px;
+  }
+  .stale-warning code {
+    font-family: 'IBM Plex Mono', monospace;
+    background: rgba(255,255,255,0.2);
+    padding: 1px 5px;
+    border-radius: 3px;
+  }
+
   .panel {
     background: var(--paper-raised);
     border: 1px solid var(--rule-soft);
@@ -408,6 +424,9 @@
       <span class="chip" id="airacChip">AIRAC: loading…</span>
       <span class="chip" id="zoneCountChip">Zones: loading…</span>
     </div>
+    <div class="stale-warning" id="staleWarning" style="display:none;">
+      <strong>This data is not current.</strong> The AIRAC cycle shown above expired on <span id="staleExpiryDate"></span>. Refresh <code>frz_data.json</code> before relying on this tool.
+    </div>
     <div class="disclaimer">
       Cross-check against the current NATS eAIP before flying. Data below shows its AIRAC date — check it's current.
     </div>
@@ -681,6 +700,44 @@ function onTowerSelected() {
   runCheck();
 }
 
+// works out when this AIRAC cycle expires (28 days after it started)
+// and shows a warning banner if that date has already passed
+function checkAiracIsCurrent(airacDateText) {
+  // airacDateText is "YYYY-MM-DD"
+  var parts = airacDateText.split("-");
+  if (parts.length !== 3) {
+    return;  // unknown format - can't check, so don't guess
+  }
+
+  var year = parseInt(parts[0], 10);
+  var month = parseInt(parts[1], 10);
+  var day = parseInt(parts[2], 10);
+
+  var startDate = new Date(year, month - 1, day);
+
+  // AIRAC cycles are exactly 28 days long
+  var expiryDate = new Date(startDate);
+  expiryDate.setDate(expiryDate.getDate() + 28);
+
+  var today = new Date();
+
+  var warningBox = document.getElementById("staleWarning");
+  var expiryTextEl = document.getElementById("staleExpiryDate");
+
+  var expiryDisplayText =
+    String(expiryDate.getDate()).padStart(2, "0") + "/" +
+    String(expiryDate.getMonth() + 1).padStart(2, "0") + "/" +
+    expiryDate.getFullYear();
+
+  expiryTextEl.textContent = expiryDisplayText;
+
+  if (today > expiryDate) {
+    warningBox.style.display = "block";
+  } else {
+    warningBox.style.display = "none";
+  }
+}
+
 // ---------------------------------------------------------------------------
 // load the data file as soon as the page opens
 // ---------------------------------------------------------------------------
@@ -696,6 +753,7 @@ function loadData() {
       allZones = data.zones;
       document.getElementById("airacChip").textContent = "AIRAC: " + data.airac_date;
       document.getElementById("zoneCountChip").textContent = "Zones: " + data.zone_count;
+      checkAiracIsCurrent(data.airac_date);
     })
     .catch(function (error) {
       var status = document.getElementById("statusLine");
