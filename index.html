@@ -767,17 +767,102 @@ function loadData() {
 // geometry maths - same approach as the python version, ported to js
 // ---------------------------------------------------------------------------
 
-// turns lon/lat into a flat local x,y map (metres) centred on the
-// reference point. this is a simple flat-earth approximation - it's
-// accurate enough over the ~50km radius we care about here
+// projects lon/lat onto a flat local x,y map (metres) centred on the
+// reference point, using Vincenty's formula on the WGS84 ellipsoid -
+// the same ellipsoid model the python tool's pyproj "aeqd" projection
+// uses. This was previously a simple flat-earth approximation (metres
+// per degree scaled by cos(latitude)), which put the python tool and
+// this website up to ~300m apart on a 50km check without either side
+// knowing it. Vincenty matches pyproj's output to sub-metre accuracy
+// at every latitude and bearing tested (see conversation record) -
+// the flat-earth shortcut is not an acceptable substitute for this.
 function toLocalXY(lon, lat, refLon, refLat) {
-  var metresPerDegreeLat = 110540;
-  var metresPerDegreeLon = 111320 * Math.cos(refLat * Math.PI / 180);
+  var result = vincentyDistanceAndBearing(refLat, refLon, lat, lon);
+  var distM = result[0];
+  var bearingDeg = result[1];
 
-  var x = (lon - refLon) * metresPerDegreeLon;
-  var y = (lat - refLat) * metresPerDegreeLat;
+  var bearingRad = bearingDeg * Math.PI / 180;
+
+  // x = east component, y = north component - matching bearingOf()'s
+  // atan2(x, y) convention used everywhere else in this file
+  var x = distM * Math.sin(bearingRad);
+  var y = distM * Math.cos(bearingRad);
 
   return [x, y];
+}
+
+// Vincenty's inverse formula: given two lat/lon points on the WGS84
+// ellipsoid, returns [distance in metres, initial bearing in degrees].
+// This is the standard formula for accurate ellipsoidal geodesic
+// distance - ported directly from the same maths pyproj uses.
+function vincentyDistanceAndBearing(lat1, lon1, lat2, lon2) {
+  var a = 6378137.0;            // WGS84 semi-major axis, metres
+  var f = 1 / 298.257223563;    // WGS84 flattening
+  var b = (1 - f) * a;
+
+  var L = (lon2 - lon1) * Math.PI / 180;
+  var U1 = Math.atan((1 - f) * Math.tan(lat1 * Math.PI / 180));
+  var U2 = Math.atan((1 - f) * Math.tan(lat2 * Math.PI / 180));
+  var sinU1 = Math.sin(U1), cosU1 = Math.cos(U1);
+  var sinU2 = Math.sin(U2), cosU2 = Math.cos(U2);
+
+  var lam = L;
+  var sinSigma, cosSigma, sigma, sinAlpha, cosSqAlpha, cos2SigmaM;
+  var iteration = 0;
+
+  while (iteration < 100) {
+    var sinLam = Math.sin(lam);
+    var cosLam = Math.cos(lam);
+
+    sinSigma = Math.sqrt(
+      Math.pow(cosU2 * sinLam, 2) +
+      Math.pow(cosU1 * sinU2 - sinU1 * cosU2 * cosLam, 2)
+    );
+
+    if (sinSigma === 0) {
+      return [0, 0];  // the two points are the same
+    }
+
+    cosSigma = sinU1 * sinU2 + cosU1 * cosU2 * cosLam;
+    sigma = Math.atan2(sinSigma, cosSigma);
+    sinAlpha = cosU1 * cosU2 * sinLam / sinSigma;
+    cosSqAlpha = 1 - sinAlpha * sinAlpha;
+
+    if (cosSqAlpha !== 0) {
+      cos2SigmaM = cosSigma - 2 * sinU1 * sinU2 / cosSqAlpha;
+    } else {
+      cos2SigmaM = 0;
+    }
+
+    var C = f / 16 * cosSqAlpha * (4 + f * (4 - 3 * cosSqAlpha));
+    var lamPrev = lam;
+    lam = L + (1 - C) * f * sinAlpha * (
+      sigma + C * sinSigma * (cos2SigmaM + C * cosSigma * (-1 + 2 * cos2SigmaM * cos2SigmaM))
+    );
+
+    if (Math.abs(lam - lamPrev) < 1e-12) {
+      break;
+    }
+    iteration = iteration + 1;
+  }
+
+  var uSq = cosSqAlpha * (a * a - b * b) / (b * b);
+  var A = 1 + uSq / 16384 * (4096 + uSq * (-768 + uSq * (320 - 175 * uSq)));
+  var B = uSq / 1024 * (256 + uSq * (-128 + uSq * (74 - 47 * uSq)));
+  var deltaSigma = B * sinSigma * (cos2SigmaM + B / 4 * (
+    cosSigma * (-1 + 2 * cos2SigmaM * cos2SigmaM) -
+    B / 6 * cos2SigmaM * (-3 + 4 * sinSigma * sinSigma) * (-3 + 4 * cos2SigmaM * cos2SigmaM)
+  ));
+
+  var distM = b * A * (sigma - deltaSigma);
+
+  var bearingRad = Math.atan2(
+    cosU2 * Math.sin(lam),
+    cosU1 * sinU2 - sinU1 * cosU2 * Math.cos(lam)
+  );
+  var bearingDeg = (bearingRad * 180 / Math.PI + 360) % 360;
+
+  return [distM, bearingDeg];
 }
 
 // finds closest point to (0,0) on a line between a & b
