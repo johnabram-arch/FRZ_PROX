@@ -1052,13 +1052,21 @@ function buildCopyLists(normalResults, nsaResults) {
   while (i < everything.length) {
     var r = everything[i];
 
-    list1.push(r.name);
+    if (r.inside) {
+      list1.push(r.name + "  -  INSIDE THIS ZONE");
+    } else {
+      list1.push(r.name);
+    }
 
     var phone = r.phone;
     if (phone === "No number available." || phone === "") {
       phone = "no number available";
     }
-    list2.push(r.name + "  -  " + phone);
+    if (r.inside) {
+      list2.push(r.name + "  -  " + phone + "  -  INSIDE THIS ZONE");
+    } else {
+      list2.push(r.name + "  -  " + phone);
+    }
 
     if (r.inside) {
       list3.push(r.name + "  -  INSIDE THIS ZONE");
