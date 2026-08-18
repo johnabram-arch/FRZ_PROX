@@ -731,6 +731,30 @@ function runCheck() {
   normalResults.sort(function (a, b) { return a.dist - b.dist; });
   nsaResults.sort(function (a, b) { return a.dist - b.dist; });
 
+  // the map needs EVERY individual zone, not just the closest one per
+  // airfield - an airfield can have several separate runway RPZ shapes
+  // (one per runway end) which all collapse to the same "place" once
+  // the RWY suffix is stripped for the text-list grouping above. the
+  // text lists stay deduplicated (nobody wants 4 near-identical rows
+  // per airfield), but the map would otherwise only ever draw one
+  // runway shape and silently hide the rest.
+  var normalResultsForMap = [];
+  var nsaResultsForMap = [];
+
+  i = 0;
+  while (i < results.length) {
+    var mapResult = results[i];
+    var mapPlace = getPlaceName(mapResult.name);
+
+    if (mapPlace.indexOf("NSA") === 0) {
+      nsaResultsForMap.push(mapResult);
+    } else {
+      normalResultsForMap.push(mapResult);
+    }
+
+    i = i + 1;
+  }
+
   status.textContent = "Found " + normalResults.length + " FRZ/RPZ and " + nsaResults.length + " NSA within " + RADIUS_KM + " km.";
 
   renderResults("frzPanel", "frzList", "frzCount", normalResults);
@@ -740,7 +764,7 @@ function runCheck() {
   // the map goes last and is wrapped up safely - if anything goes wrong
   // drawing it, the results and copy lists above must still work
   try {
-    renderMap(refLat, refLon, normalResults, nsaResults);
+    renderMap(refLat, refLon, normalResultsForMap, nsaResultsForMap);
   } catch (error) {
     console.error("could not draw the map:", error);
     var mapStatus = document.getElementById("statusLine");
