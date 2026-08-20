@@ -469,7 +469,7 @@
 
   <div class="panel" id="copyPanel" style="display:none;">
     <h2>Copy lists</h2>
-    <p class="copy-intro">Three ready-made lists covering every FRZ and NSA found. Click to copy, then paste straight into a document.</p>
+    <p class="copy-intro">Ready-made lists for what was found. Click to copy, then paste straight into a document.</p>
 
     <div class="copy-block">
       <div class="copy-head">
@@ -493,6 +493,14 @@
         <button class="btn-copy" data-target="copyText3">Copy</button>
       </div>
       <textarea class="copy-text" id="copyText3" readonly rows="5"></textarea>
+    </div>
+
+    <div class="copy-block">
+      <div class="copy-head">
+        <span class="copy-label">4 &middot; NSAs (military / government / prison sites)</span>
+        <button class="btn-copy" data-target="copyText4">Copy</button>
+      </div>
+      <textarea class="copy-text" id="copyText4" readonly rows="5"></textarea>
     </div>
   </div>
 
@@ -1125,17 +1133,17 @@ function runCheck() {
 // the three copy-and-paste lists
 // ---------------------------------------------------------------------------
 function buildCopyLists(normalResults, nsaResults) {
-  // both lists together, closest first - the copy lists cover everything
-  var everything = normalResults.concat(nsaResults);
-  everything.sort(function (a, b) { return a.dist - b.dist; });
+  // lists 1-3 are FRZ/RPZ only now - NSAs get their own list 4 instead
+  var frzOnly = normalResults.slice();
+  frzOnly.sort(function (a, b) { return a.dist - b.dist; });
 
   var list1 = [];  // just the name (which already starts with the frz number)
   var list2 = [];  // name + phone number
   var list3 = [];  // name + distance and bearing
 
   var i = 0;
-  while (i < everything.length) {
-    var r = everything[i];
+  while (i < frzOnly.length) {
+    var r = frzOnly[i];
 
     if (r.inside) {
       list1.push(r.name + "  -  INSIDE THIS ZONE");
@@ -1164,9 +1172,37 @@ function buildCopyLists(normalResults, nsaResults) {
     i = i + 1;
   }
 
+  // list 4 is NSAs only, closest first - one line each covering name,
+  // phone, and distance/bearing together since this is their only list
+  var nsaSorted = nsaResults.slice();
+  nsaSorted.sort(function (a, b) { return a.dist - b.dist; });
+
+  var list4 = [];
+
+  i = 0;
+  while (i < nsaSorted.length) {
+    var n = nsaSorted[i];
+
+    var nsaPhone = n.phone;
+    if (nsaPhone === "No number available." || nsaPhone === "") {
+      nsaPhone = "no number available";
+    }
+
+    if (n.inside) {
+      list4.push(n.name + "  -  " + nsaPhone + "  -  INSIDE THIS ZONE");
+    } else {
+      var nsaKm = n.dist.toFixed(1) + " km";
+      var nsaBearing = String(Math.round(n.bearing) % 360).padStart(3, "0") + " deg";
+      list4.push(n.name + "  -  " + nsaPhone + "  -  " + nsaKm + "  -  " + nsaBearing);
+    }
+
+    i = i + 1;
+  }
+
   document.getElementById("copyText1").value = list1.join("\n");
   document.getElementById("copyText2").value = list2.join("\n");
   document.getElementById("copyText3").value = list3.join("\n");
+  document.getElementById("copyText4").value = list4.join("\n");
 
   document.getElementById("copyPanel").style.display = "block";
 }
