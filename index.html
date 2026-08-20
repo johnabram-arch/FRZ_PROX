@@ -337,6 +337,23 @@
     margin: 0 0 18px;
   }
 
+  .missing-numbers-intro {
+    font-size: 13px;
+    font-weight: 600;
+    color: var(--restricted);
+    margin: 0 0 12px;
+  }
+
+  .missing-numbers-list {
+    margin: 0;
+    padding-left: 20px;
+    font-size: 14px;
+    line-height: 1.7;
+  }
+  .missing-numbers-list li {
+    margin-bottom: 2px;
+  }
+
   .copy-block { margin-bottom: 18px; }
   .copy-block:last-child { margin-bottom: 0; }
 
@@ -467,6 +484,12 @@
     <div id="map"></div>
   </div>
 
+  <div class="panel" id="missingNumbersPanel" style="display:none;">
+    <h2>Numbers needed</h2>
+    <p class="missing-numbers-intro">Must find a number for these FRZs:</p>
+    <div id="missingNumbersList"></div>
+  </div>
+
   <div class="panel" id="copyPanel" style="display:none;">
     <h2>Copy lists</h2>
     <p class="copy-intro">Ready-made lists for what was found. Click to copy, then paste straight into a document.</p>
@@ -497,7 +520,7 @@
 
     <div class="copy-block">
       <div class="copy-head">
-        <span class="copy-label">4 &middot; NSAs (military / government)</span>
+        <span class="copy-label">4 &middot; NSAs (military / government / prison sites)</span>
         <button class="btn-copy" data-target="copyText4">Copy</button>
       </div>
       <textarea class="copy-text" id="copyText4" readonly rows="5"></textarea>
@@ -510,7 +533,7 @@
   </div>
 
   <div class="panel results" id="nsaPanel" style="display:none;">
-    <h2>NSAs — military / government <span class="count" id="nsaCount"></span></h2>
+    <h2>NSAs — military / government / prison sites <span class="count" id="nsaCount"></span></h2>
     <div id="nsaList"></div>
   </div>
 
@@ -1116,6 +1139,7 @@ function runCheck() {
 
   renderResults("frzPanel", "frzList", "frzCount", normalResults);
   renderResults("nsaPanel", "nsaList", "nsaCount", nsaResults);
+  renderMissingNumbers(normalResults, nsaResults);
   buildCopyLists(normalResults, nsaResults);
 
   // the map goes last and is wrapped up safely - if anything goes wrong
@@ -1127,6 +1151,47 @@ function runCheck() {
     var mapStatus = document.getElementById("statusLine");
     mapStatus.textContent = "Results found, but the map could not be drawn. See the lists below.";
   }
+}
+
+// ---------------------------------------------------------------------------
+// lists any zone (FRZ or NSA) found in this search with no phone
+// number at all, so it's obvious which ones still need looking up
+// ---------------------------------------------------------------------------
+function renderMissingNumbers(normalResults, nsaResults) {
+  var panel = document.getElementById("missingNumbersPanel");
+  var list = document.getElementById("missingNumbersList");
+
+  var missing = [];
+
+  var i = 0;
+  while (i < normalResults.length) {
+    var r = normalResults[i];
+    if (r.phone === "No number available." || r.phone === "") {
+      missing.push(r.name);
+    }
+    i = i + 1;
+  }
+
+  if (missing.length === 0) {
+    panel.style.display = "none";
+    return;
+  }
+
+  panel.style.display = "block";
+  list.innerHTML = "";
+
+  var ul = document.createElement("ul");
+  ul.className = "missing-numbers-list";
+
+  var j = 0;
+  while (j < missing.length) {
+    var li = document.createElement("li");
+    li.textContent = missing[j];
+    ul.appendChild(li);
+    j = j + 1;
+  }
+
+  list.appendChild(ul);
 }
 
 // ---------------------------------------------------------------------------
