@@ -357,6 +357,64 @@
     white-space: nowrap;
   }
 
+  /* NOTAMs - amber, not red: important and time-sensitive, but not
+     the same certainty as a legal restriction */
+  #notamPanel {
+    border-left: 3px solid #B8860B;
+  }
+  .notam-warning {
+    margin: 0 0 14px 0;
+    padding: 10px 12px;
+    background: #FFF3CD;
+    border-left: 3px solid #B8860B;
+    font-size: 13px;
+    line-height: 1.5;
+    color: var(--ink);
+    border-radius: 0 3px 3px 0;
+  }
+  .notam-warning strong { color: #8A6200; }
+
+  .notam-row {
+    padding: 12px 0;
+    border-bottom: 1px solid var(--rule-soft);
+  }
+  .notam-row:last-child { border-bottom: none; }
+
+  .notam-head {
+    display: flex;
+    justify-content: space-between;
+    align-items: baseline;
+    gap: 10px;
+    margin-bottom: 4px;
+  }
+  .notam-id {
+    font-family: 'IBM Plex Mono', monospace;
+    font-weight: 600;
+    font-size: 13px;
+  }
+  .notam-status {
+    font-family: 'IBM Plex Mono', monospace;
+    font-size: 11px;
+    font-weight: 600;
+    letter-spacing: 0.04em;
+    padding: 2px 7px;
+    border-radius: 3px;
+    white-space: nowrap;
+  }
+  .notam-status.active { background: #FFF3CD; color: #8A6200; }
+  .notam-status.upcoming { background: var(--paper-raised); color: var(--ink-soft); border: 1px solid var(--rule); }
+
+  .notam-meta {
+    font-family: 'IBM Plex Mono', monospace;
+    font-size: 12px;
+    color: var(--ink-soft);
+    margin-bottom: 4px;
+  }
+  .notam-text {
+    font-size: 13.5px;
+    line-height: 1.5;
+  }
+
   #map {
     height: 440px;
     width: 100%;
@@ -559,7 +617,9 @@
 
     <div class="suggest-box">
       <p class="suggest-intro">
-        If you have found a number for one of these airfields, please send it through below.
+        Found a number for one of these? Send it in and it'll go into the next
+        data build. Opens an email to <strong>jabram@sees.ai</strong> with the
+        zone details filled in.
       </p>
 
       <div class="suggest-grid">
@@ -643,6 +703,18 @@
     <div id="airstripList"></div>
   </div>
 
+  <div class="panel results" id="notamPanel" style="display:none;">
+    <h2>NOTAMs affecting this area <span class="count" id="notamCount"></span></h2>
+    <div class="notam-warning">
+      <strong>Unofficial, best-effort.</strong> Sourced from NATS' contingency
+      briefing feed, not a purpose-built API. Trigger NOTAMs are valid for two
+      weeks only, and this data goes stale between updates - check
+      <span id="notamDataAge"></span>. This is not a substitute for a proper
+      pre-flight NOTAM briefing.
+    </div>
+    <div id="notamList"></div>
+  </div>
+
   <footer>
     Data: NATS UK Digital Datasets &amp; atcadvisor.com &middot; built for internal planning use
   </footer>
@@ -663,11 +735,15 @@ var RADIUS_KM = 50;
 // would list hundreds of them and drown out the actual restrictions
 var AIRSTRIP_RADIUS_KM = 5;
 
+var NOTAM_FILE = "notam_data.json";
+
 // where "numbers needed" suggestions get emailed
 var SUGGEST_EMAIL = "jabram@sees.ai";
 
 var allZones = [];
 var allAirstrips = [];  // advisory only - plain points, no rings
+var allNotams = [];     // advisory only - circles, not polygons
+var notamValidTo = null;
 var missingNumberZones = [];  // names shown in the "numbers needed" panel
 var currentAirac = "unknown";
 var towerIndex = {};  // base code (prefix+number, e.g. "4YG005") -> list of towers
@@ -930,6 +1006,29 @@ function loadAirstrips() {
     .catch(function (error) {
       allAirstrips = [];
       console.warn("advisory airstrip list unavailable:", error);
+    });
+}
+
+// ---------------------------------------------------------------------------
+// NOTAMs - separate, optional, and explicitly unofficial. a NOTAM here is
+// a circle (centre + radius), not a polygon, so "relevant" just means the
+// search point falls inside that circle
+// ---------------------------------------------------------------------------
+function loadNotams() {
+  fetch(NOTAM_FILE)
+    .then(function (response) {
+      if (!response.ok) {
+        throw new Error("could not load " + NOTAM_FILE);
+      }
+      return response.json();
+    })
+    .then(function (data) {
+      allNotams = data.notams;
+      notamValidTo = data.valid_to;
+    })
+    .catch(function (error) {
+      allNotams = [];
+      console.warn("NOTAM list unavailable:", error);
     });
 }
 
@@ -1279,6 +1378,7 @@ function runCheck() {
   renderResults("frzPanel", "frzList", "frzCount", normalResults);
   renderResults("nsaPanel", "nsaList", "nsaCount", nsaResults);
   renderAirstrips(findNearbyAirstrips(refLat, refLon));
+  renderNotams(findRelevantNotams(refLat, refLon));
   renderMissingNumbers(normalResults, nsaResults);
   buildCopyLists(normalResults, nsaResults);
 
@@ -1763,6 +1863,181 @@ function renderAirstrips(strips) {
 }
 
 
+// ---------------------------------------------------------------------------
+// NOTAMs - separate, optional, and explicitly unofficial. a NOTAM here is
+// a circle (centre + radius), not a polygon, so "relevant" just means the
+// search point falls inside that circle
+// ---------------------------------------------------------------------------
+
+// "2026-08-24T06:00:00" -> "24 Aug 2026 06:00"
+function formatNotamDate(isoText) {
+  if (!isoText) {
+    return "unknown";
+  }
+
+  var date = new Date(isoText);
+  if (isNaN(date.getTime())) {
+    return isoText;  // couldn't parse it - show the raw value rather than nothing
+  }
+
+  var months = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
+
+  var day = String(date.getDate()).padStart(2, "0");
+  var month = months[date.getMonth()];
+  var year = date.getFullYear();
+  var hours = String(date.getHours()).padStart(2, "0");
+  var minutes = String(date.getMinutes()).padStart(2, "0");
+
+  return day + " " + month + " " + year + " " + hours + ":" + minutes;
+}
+
+// flight levels in the feed are already "hundreds of feet" (Lower=2 means
+// 200ft) - not the FL0xx notation used in text NOTAMs, so no /100 needed
+function formatFlightLevels(lowerText, upperText) {
+  if (!lowerText && !upperText) {
+    return "";
+  }
+
+  var lowerFt = (lowerText === "0") ? "SFC" : lowerText + "00ft";
+  var upperFt = (upperText === "999") ? "unltd" : upperText + "00ft";
+
+  return lowerFt + " - " + upperFt;
+}
+
+function findRelevantNotams(refLat, refLon) {
+  var now = new Date();
+  var found = [];
+
+  var i = 0;
+  while (i < allNotams.length) {
+    var notam = allNotams[i];
+
+    // cheap box check before the full geodesic calculation - a NOTAM's
+    // radius is at most a few hundred km, so anything more than ~3
+    // degrees away in either axis cannot possibly be inside it
+    if (Math.abs(notam.lat - refLat) > 3 || Math.abs(notam.lon - refLon) > 5) {
+      i = i + 1;
+      continue;
+    }
+
+    var result = vincentyDistanceAndBearing(refLat, refLon, notam.lat, notam.lon);
+    var distM = result[0];
+
+    // "relevant" = the search point falls inside the NOTAM's circle
+    if (distM > notam.radius_m) {
+      i = i + 1;
+      continue;
+    }
+
+    var status = "active";
+
+    if (notam.end) {
+      var endDate = new Date(notam.end);
+      if (!isNaN(endDate.getTime()) && endDate < now) {
+        i = i + 1;
+        continue;  // already expired - don't show it even though it's geographically inside
+      }
+    }
+
+    if (notam.start) {
+      var startDate = new Date(notam.start);
+      if (!isNaN(startDate.getTime()) && startDate > now) {
+        status = "upcoming";
+      }
+    }
+
+    found.push({
+      id: notam.id,
+      aerodrome: notam.aerodrome,
+      text: notam.text,
+      lowerFl: notam.lower_fl,
+      upperFl: notam.upper_fl,
+      start: notam.start,
+      end: notam.end,
+      status: status,
+      distM: distM
+    });
+
+    i = i + 1;
+  }
+
+  // active first, then upcoming; within each, soonest-ending first so
+  // the most time-critical items are at the top
+  found.sort(function (a, b) {
+    if (a.status !== b.status) {
+      return a.status === "active" ? -1 : 1;
+    }
+    return (a.end || "").localeCompare(b.end || "");
+  });
+
+  return found;
+}
+
+
+function renderNotams(notams) {
+  var panel = document.getElementById("notamPanel");
+  var list = document.getElementById("notamList");
+  var countEl = document.getElementById("notamCount");
+  var ageEl = document.getElementById("notamDataAge");
+
+  ageEl.textContent = notamValidTo
+    ? "this data is valid until " + formatNotamDate(notamValidTo)
+    : "the data's validity window";
+
+  // no data file loaded - hide the panel entirely rather than implying
+  // "no NOTAMs" when really nothing was checked
+  if (allNotams.length === 0) {
+    panel.style.display = "none";
+    return;
+  }
+
+  panel.style.display = "block";
+  countEl.textContent = "(" + notams.length + ")";
+  list.innerHTML = "";
+
+  if (notams.length === 0) {
+    list.innerHTML = '<p class="empty-note">None found affecting this location.</p>';
+    return;
+  }
+
+  var i = 0;
+  while (i < notams.length) {
+    var n = notams[i];
+
+    var row = document.createElement("div");
+    row.className = "notam-row";
+
+    var statusLabel = n.status === "upcoming" ? "UPCOMING" : "ACTIVE";
+
+    var head = document.createElement("div");
+    head.className = "notam-head";
+    head.innerHTML =
+      '<span class="notam-id"></span>' +
+      '<span class="notam-status ' + n.status + '"></span>';
+    head.querySelector(".notam-id").textContent = n.id + (n.aerodrome ? " \u00B7 " + n.aerodrome : "");
+    head.querySelector(".notam-status").textContent = statusLabel;
+
+    var meta = document.createElement("div");
+    meta.className = "notam-meta";
+    var flText = formatFlightLevels(n.lowerFl, n.upperFl);
+    meta.textContent =
+      formatNotamDate(n.start) + " \u2192 " + formatNotamDate(n.end) +
+      (flText ? "  \u00B7  " + flText : "");
+
+    var body = document.createElement("div");
+    body.className = "notam-text";
+    body.textContent = n.text;  // NOTAM text is free-form data, not trusted markup
+
+    row.appendChild(head);
+    row.appendChild(meta);
+    row.appendChild(body);
+    list.appendChild(row);
+
+    i = i + 1;
+  }
+}
+
+
 function renderResults(panelId, listId, countId, results) {
   var panel = document.getElementById(panelId);
   var list = document.getElementById(listId);
@@ -1875,6 +2150,7 @@ while (b < copyButtons.length) {
 loadData();
 loadTowerData();
 loadAirstrips();
+loadNotams();
 
 // the map is a nice-to-have - if it fails, everything else must
 // still work, so it's kept separate from the main page setup
