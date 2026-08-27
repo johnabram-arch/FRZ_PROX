@@ -387,6 +387,41 @@
     margin-bottom: 2px;
   }
 
+  .suggest-box {
+    margin-top: 16px;
+    padding-top: 14px;
+    border-top: 1px solid var(--rule);
+  }
+  .suggest-intro {
+    font-size: 13px;
+    color: var(--ink-soft);
+    line-height: 1.5;
+    margin: 0 0 12px;
+  }
+  .suggest-grid {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 10px;
+    margin-bottom: 10px;
+  }
+  .suggest-grid .field { margin: 0; }
+  .suggest-grid label,
+  .suggest-full label {
+    display: block;
+    font-size: 12px;
+    color: var(--ink-soft);
+    margin-bottom: 4px;
+  }
+  .suggest-full { margin-bottom: 10px; }
+  .suggest-box select,
+  .suggest-box input {
+    width: 100%;
+    box-sizing: border-box;
+  }
+  @media (max-width: 560px) {
+    .suggest-grid { grid-template-columns: 1fr; }
+  }
+
   .copy-block { margin-bottom: 18px; }
   .copy-block:last-child { margin-bottom: 0; }
 
@@ -521,6 +556,34 @@
     <h2>Numbers needed</h2>
     <p class="missing-numbers-intro">Must find a number for these FRZs:</p>
     <div id="missingNumbersList"></div>
+
+    <div class="suggest-box">
+      <p class="suggest-intro">
+        Found a number for one of these? Send it in and it'll go into the next
+        data build. Opens an email to <strong>jabram@sees.ai</strong> with the
+        zone details filled in.
+      </p>
+
+      <div class="suggest-grid">
+        <div class="field">
+          <label for="suggestZone">Zone</label>
+          <select id="suggestZone"></select>
+        </div>
+        <div class="field">
+          <label for="suggestNumber">Number you found</label>
+          <input type="text" id="suggestNumber" placeholder="e.g. 01234 567890">
+        </div>
+      </div>
+
+      <div class="suggest-full">
+        <label for="suggestSource">Where it came from (optional)</label>
+        <input type="text" id="suggestSource" placeholder="e.g. airfield website, or rang it and confirmed">
+      </div>
+
+      <button class="btn-secondary" id="suggestSendBtn">Email this number</button>
+      <button class="btn-secondary" id="suggestAllBtn">Email the whole list</button>
+      <p class="status-line" id="suggestStatus"></p>
+    </div>
   </div>
 
   <div class="panel" id="copyPanel" style="display:none;">
@@ -573,7 +636,11 @@
   <div class="panel results" id="airstripPanel" style="display:none;">
     <h2>Advisory — unlicensed airstrips nearby <span class="count" id="airstripCount"></span></h2>
     <p class="advisory-note">
-      <strong>These are not restricted zones.Positions are approximate and the data is crowd-sourced. There may be other airstrips nearby that are not shown</strong> 
+      <strong>These are not restricted zones.</strong> Farm strips, gliding sites
+      and private helipads have no Flight Restriction Zone and there is nobody to
+      notify. They are listed only so you know light aircraft may be operating low
+      nearby. Positions are approximate and the data is crowd-sourced, so treat
+      this as a prompt to look around rather than a definitive list.
     </p>
     <div id="airstripList"></div>
   </div>
@@ -598,8 +665,13 @@ var RADIUS_KM = 50;
 // would list hundreds of them and drown out the actual restrictions
 var AIRSTRIP_RADIUS_KM = 5;
 
+// where "numbers needed" suggestions get emailed
+var SUGGEST_EMAIL = "jabram@sees.ai";
+
 var allZones = [];
 var allAirstrips = [];  // advisory only - plain points, no rings
+var missingNumberZones = [];  // names shown in the "numbers needed" panel
+var currentAirac = "unknown";
 var towerIndex = {};  // base code (prefix+number, e.g. "4YG005") -> list of towers
 
 // the leaflet map - created the first time we need it, then reused
@@ -829,6 +901,7 @@ function loadData() {
     })
     .then(function (data) {
       allZones = data.zones;
+      currentAirac = data.airac_date;
       document.getElementById("airacChip").textContent = "AIRAC: " + data.airac_date;
       document.getElementById("zoneCountChip").textContent = "Zones: " + data.zone_count;
       checkAiracIsCurrent(data.airac_date);
@@ -1243,11 +1316,16 @@ function renderMissingNumbers(normalResults, nsaResults) {
 
   if (missing.length === 0) {
     panel.style.display = "none";
+    missingNumberZones = [];
+    fillSuggestZones();
     return;
   }
 
   panel.style.display = "block";
   list.innerHTML = "";
+
+  missingNumberZones = missing;
+  fillSuggestZones();
 
   var ul = document.createElement("ul");
   ul.className = "missing-numbers-list";
@@ -1261,6 +1339,101 @@ function renderMissingNumbers(normalResults, nsaResults) {
   }
 
   list.appendChild(ul);
+}
+
+// ---------------------------------------------------------------------------
+// "found a number?" - builds a prefilled email rather than posting anywhere,
+// so there's no server involved and nothing to maintain
+// ---------------------------------------------------------------------------
+function fillSuggestZones() {
+  var select = document.getElementById("suggestZone");
+  select.innerHTML = "";
+
+  var i = 0;
+  while (i < missingNumberZones.length) {
+    var option = document.createElement("option");
+    option.value = missingNumberZones[i];
+    option.textContent = missingNumberZones[i];
+    select.appendChild(option);
+    i = i + 1;
+  }
+}
+
+
+function openSuggestEmail(subject, body) {
+  var link = "mailto:" + SUGGEST_EMAIL +
+    "?subject=" + encodeURIComponent(subject) +
+    "&body=" + encodeURIComponent(body);
+
+  // some mail clients choke on very long mailto links
+  if (link.length > 1800) {
+    body = body.slice(0, 1200) + "\n\n[list truncated - too long for an email link]";
+    link = "mailto:" + SUGGEST_EMAIL +
+      "?subject=" + encodeURIComponent(subject) +
+      "&body=" + encodeURIComponent(body);
+  }
+
+  window.location.href = link;
+}
+
+
+function sendSuggestion() {
+  var status = document.getElementById("suggestStatus");
+  status.className = "status-line";
+
+  var zone = document.getElementById("suggestZone").value;
+  var number = document.getElementById("suggestNumber").value.trim();
+  var source = document.getElementById("suggestSource").value.trim();
+
+  if (!zone) {
+    status.textContent = "No zone selected - run a check first.";
+    status.className = "status-line error";
+    return;
+  }
+
+  if (number === "") {
+    status.textContent = "Enter the number you found before sending.";
+    status.className = "status-line error";
+    return;
+  }
+
+  var body =
+    "Suggested ATC number for the FRZ proximity tool." + "\n\n" +
+    "Zone:       " + zone + "\n" +
+    "Number:     " + number + "\n" +
+    "Source:     " + (source === "" ? "(not given)" : source) + "\n" +
+    "AIRAC:      " + currentAirac + "\n";
+
+  openSuggestEmail("FRZ tool - number for " + zone, body);
+
+  status.textContent = "Opening your email app...";
+  document.getElementById("suggestNumber").value = "";
+  document.getElementById("suggestSource").value = "";
+}
+
+
+function sendWholeList() {
+  var status = document.getElementById("suggestStatus");
+  status.className = "status-line";
+
+  if (missingNumberZones.length === 0) {
+    status.textContent = "Nothing to send - no zones are missing a number.";
+    status.className = "status-line error";
+    return;
+  }
+
+  var body =
+    "These zones have no phone number in the current dataset." + "\n" +
+    "AIRAC: " + currentAirac + "\n\n";
+
+  var i = 0;
+  while (i < missingNumberZones.length) {
+    body = body + missingNumberZones[i] + "\n    Suggested number: \n";
+    i = i + 1;
+  }
+
+  openSuggestEmail("FRZ tool - zones still needing numbers", body);
+  status.textContent = "Opening your email app...";
 }
 
 // ---------------------------------------------------------------------------
@@ -1688,6 +1861,8 @@ document.getElementById("towerRangeInput").addEventListener("keydown", function 
   if (e.key === "Enter") runTowerFind();
 });
 document.getElementById("towerSelect").addEventListener("change", onTowerSelected);
+document.getElementById("suggestSendBtn").addEventListener("click", sendSuggestion);
+document.getElementById("suggestAllBtn").addEventListener("click", sendWholeList);
 
 // wire up all three copy buttons
 var copyButtons = document.querySelectorAll(".btn-copy");
