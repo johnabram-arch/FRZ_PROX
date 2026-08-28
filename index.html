@@ -706,12 +706,13 @@
   </div>
 
   <div class="panel results" id="notamPanel" style="display:none;">
-    <h2>NOTAMs below 200m affecting this area <span class="count" id="notamCount"></span></h2>
+    <h2>NOTAMs below <span id="notamAltHeading"></span> affecting this area <span class="count" id="notamCount"></span></h2>
     <div class="notam-warning">
       <strong>Always check to confirm</strong> Sourced from <a href="https://www.nats.aero/do-it-online/pre-flight-information-bulletins/" target="_blank" rel="noopener noreferrer">
       NATS AIS Internet Briefing System Contingency</a>, not a purpose-built API.
       Official but may be up to an hour out of date, not a substitute for a full briefing.
-      Filtered to NOTAMs starting at or below (120m). Check last update.
+      Filtered to NOTAMs whose lower limit is at or below <span id="notamAltNote"></span>.
+      All times shown are UTC, as NOTAMs are always issued in UTC.
       <span id="notamDataAge"></span>. This is not a substitute for a proper
       pre-flight NOTAM briefing.
     </div>
@@ -735,16 +736,27 @@ var AIRSTRIP_FILE = "airstrip_data.json";
 var RADIUS_KM = 50;
 
 // advisory strips are only worth mentioning when they're close - 50 km
-// would list hundreds of them and drown out the actual restrictions
+// would list hundreds of them and drown out the actual restrictions.
+//
+// this is now read from advisory_radius_m in airstrip_data.json, which
+// is the single place it's configured. the value here is only a
+// fallback for an older data file that doesn't carry the field. the
+// page used to hard-code 5 km while the build script said 1 km, and
+// neither knew about the other.
 var AIRSTRIP_RADIUS_KM = 5;
 
 var NOTAM_FILE = "notam_data.json";
 
 // only show NOTAMs whose lower limit is at or below this - anything that
 // starts higher than this can't affect a UAS flying beneath it.
-// 200m = 656.17 ft; the feed's lower_fl is already in hundreds of feet
-// (e.g. "6" means 600ft), so this stays in plain feet for the comparison
-var UAS_MAX_ALTITUDE_FT = 656;
+// the feed's lower_fl is already in hundreds of feet (e.g. "6" means
+// 600ft), so this stays in plain feet for the comparison.
+//
+// CHANGE THIS IN ONE PLACE ONLY. the headings and the warning text
+// below are generated from it, because they used to say 200m and 120m
+// in the same panel.
+var UAS_MAX_ALTITUDE_M = 120;
+var UAS_MAX_ALTITUDE_FT = Math.round(UAS_MAX_ALTITUDE_M / 0.3048);
 
 // where "numbers needed" suggestions get emailed
 var SUGGEST_EMAIL = "jabram@sees.ai";
@@ -753,6 +765,16 @@ var allZones = [];
 var allAirstrips = [];  // advisory only - plain points, no rings
 var allNotams = [];     // advisory only - circles, not polygons
 var notamValidTo = null;
+var notamMaxRadiusM = 0;  // biggest radius in the file, for the box check
+
+// "haven't loaded yet" and "loaded, and there genuinely aren't any" look
+// identical if you only check .length. these tell them apart, so a check
+// run two seconds after opening the page doesn't quietly show an empty
+// advisory panel as though it had been searched
+var airstripsLoaded = false;
+var airstripLoadFailed = false;
+var notamsLoaded = false;
+var notamLoadFailed = false;
 var missingNumberZones = [];  // names shown in the "numbers needed" panel
 var currentAirac = "unknown";
 
@@ -992,6 +1014,7 @@ function loadData() {
     })
     .then(function (data) {
       allZones = data.zones;
+      indexZones(allZones);
       currentAirac = data.airac_date;
       frzGeneratedAt = data.generated_at || null;
       numbersGeneratedAt = data.atc_numbers_generated_at || null;
@@ -1024,9 +1047,17 @@ function loadAirstrips() {
     .then(function (data) {
       allAirstrips = data.strips;
       airstripGeneratedAt = data.generated_at || null;
+
+      if (typeof data.advisory_radius_m === "number" && data.advisory_radius_m > 0) {
+        AIRSTRIP_RADIUS_KM = data.advisory_radius_m / 1000;
+      }
+
+      airstripsLoaded = true;
     })
     .catch(function (error) {
       allAirstrips = [];
+      airstripsLoaded = false;
+      airstripLoadFailed = true;
       console.warn("advisory airstrip list unavailable:", error);
     });
 }
@@ -1048,10 +1079,24 @@ function loadNotams() {
       allNotams = data.notams;
       notamValidTo = data.valid_to;
       notamGeneratedAt = data.generated_at || null;
+      notamsLoaded = true;
+
+      // how wide the pre-filter box has to be. the build script reports
+      // the largest radius in the file; work it out here too in case
+      // we're reading an older file that doesn't carry the field
+      notamMaxRadiusM = data.max_radius_m || 0;
+      for (var m = 0; m < allNotams.length; m++) {
+        if (allNotams[m].radius_m > notamMaxRadiusM) {
+          notamMaxRadiusM = allNotams[m].radius_m;
+        }
+      }
+
       updateRefreshedChip("notamRefreshedChip", "NOTAMs refreshed", notamGeneratedAt);
     })
     .catch(function (error) {
       allNotams = [];
+      notamsLoaded = false;
+      notamLoadFailed = true;
       console.warn("NOTAM list unavailable:", error);
     });
 }
@@ -1059,6 +1104,83 @@ function loadNotams() {
 // ---------------------------------------------------------------------------
 // geometry maths - same approach as the python version, ported to js
 // ---------------------------------------------------------------------------
+
+// metres per degree, used only for conservative bounding-box maths.
+// deliberately generous rather than exact - a box test that is slightly
+// too big costs a few wasted calculations, one that is slightly too
+// small silently loses a zone
+var M_PER_DEG_LAT = 110574;
+var M_PER_DEG_LON_EQUATOR = 111320;
+
+// widest a given number of metres can be in degrees of longitude at
+// this latitude, with a safety factor
+function lonDegreesFor(metres, atLat) {
+  var shrink = Math.cos(atLat * Math.PI / 180);
+  if (shrink < 0.1) {
+    shrink = 0.1;  // don't divide by ~0 near the poles
+  }
+  return (metres / (M_PER_DEG_LON_EQUATOR * shrink)) * 1.05;
+}
+
+// precomputes, once per data load:
+//   - a lon/lat bounding box per zone, so a search can reject the ~95%
+//     of zones nowhere near the reference point without running
+//     Vincenty over each of their ring points. before this, every check
+//     transformed all ~30,000 ring points in the dataset.
+//   - a closed copy of the ring. 13 of the 853 zones arrive with the
+//     last point not repeating the first, and the edge-walking loops
+//     below run i -> i+1 and stop one short, so those zones were
+//     silently losing their closing edge.
+function indexZones(zones) {
+  for (var i = 0; i < zones.length; i++) {
+    var ring = zones[i].ring;
+
+    if (!ring || ring.length === 0) {
+      zones[i].closedRing = [];
+      zones[i].bbox = null;
+      continue;
+    }
+
+    var first = ring[0];
+    var last = ring[ring.length - 1];
+
+    if (first[0] !== last[0] || first[1] !== last[1]) {
+      ring = ring.concat([[first[0], first[1]]]);
+    }
+    zones[i].closedRing = ring;
+
+    var minLon = ring[0][0], maxLon = ring[0][0];
+    var minLat = ring[0][1], maxLat = ring[0][1];
+
+    for (var j = 1; j < ring.length; j++) {
+      if (ring[j][0] < minLon) minLon = ring[j][0];
+      if (ring[j][0] > maxLon) maxLon = ring[j][0];
+      if (ring[j][1] < minLat) minLat = ring[j][1];
+      if (ring[j][1] > maxLat) maxLat = ring[j][1];
+    }
+
+    zones[i].bbox = { minLon: minLon, maxLon: maxLon, minLat: minLat, maxLat: maxLat };
+  }
+}
+
+// could any part of this zone be within RADIUS_KM of the reference
+// point? a "no" here is always correct; a "yes" just means we do the
+// full calculation
+function zoneCouldBeInRange(zone, refLat, refLon) {
+  if (!zone.bbox) {
+    return true;  // no box - never skip it
+  }
+
+  var latPad = (RADIUS_KM * 1000) / M_PER_DEG_LAT * 1.05;
+  var lonPad = lonDegreesFor(RADIUS_KM * 1000, refLat);
+
+  if (refLat < zone.bbox.minLat - latPad) return false;
+  if (refLat > zone.bbox.maxLat + latPad) return false;
+  if (refLon < zone.bbox.minLon - lonPad) return false;
+  if (refLon > zone.bbox.maxLon + lonPad) return false;
+
+  return true;
+}
 
 // projects lon/lat onto a flat local x,y map (metres) centred on the
 // reference point, using Vincenty's formula on the WGS84 ellipsoid -
@@ -1314,11 +1436,22 @@ function runCheck() {
   while (i < allZones.length) {
     var zone = allZones[i];
 
+    // cheap rejection first. without this, every check transformed all
+    // ~30,000 ring points in the dataset through Vincenty, which is
+    // most of a second on a phone and ran again on every dropdown change
+    if (!zoneCouldBeInRange(zone, refLat, refLon)) {
+      i = i + 1;
+      continue;
+    }
+
+    // closedRing, not ring - see indexZones()
+    var zoneRing = zone.closedRing || zone.ring;
+
     var ringXY = [];
     var j = 0;
-    while (j < zone.ring.length) {
-      var lon = zone.ring[j][0];
-      var lat = zone.ring[j][1];
+    while (j < zoneRing.length) {
+      var lon = zoneRing[j][0];
+      var lat = zoneRing[j][1];
       ringXY.push(toLocalXY(lon, lat, refLon, refLat));
       j = j + 1;
     }
@@ -1326,7 +1459,7 @@ function runCheck() {
     var inside = pointInRing(ringXY);
 
     if (inside) {
-      results.push({ dist: 0, bearing: 0, name: zone.name, phone: zone.phone, inside: true, ring: zone.ring });
+      results.push({ dist: 0, bearing: 0, name: zone.name, phone: zone.phone, inside: true, ring: zoneRing });
     } else {
       var nearest = nearestPointOnRing(ringXY);
       var distM = nearest[0];
@@ -1336,7 +1469,7 @@ function runCheck() {
 
       if (distKm <= RADIUS_KM) {
         var bearing = bearingOf(cx, cy);
-        results.push({ dist: distKm, bearing: bearing, name: zone.name, phone: zone.phone, inside: false, ring: zone.ring });
+        results.push({ dist: distKm, bearing: bearing, name: zone.name, phone: zone.phone, inside: false, ring: zoneRing });
       }
     }
 
@@ -1772,15 +1905,31 @@ function renderMap(refLat, refLon, normalResults, nsaResults) {
       fillOpacity: result.inside ? 0.35 : 0.15
     }).addTo(map);
 
-    var popupText = "<b>" + result.name + "</b><br>";
-    if (result.inside) {
-      popupText = popupText + "<span style='color:#C81E4B; font-weight:600;'>Reference point is inside this zone</span><br>";
-    } else {
-      popupText = popupText + result.dist.toFixed(1) + " km away<br>";
-    }
-    popupText = popupText + "<div class='map-popup-phone'>" + result.phone + "</div>";
+    // same reasoning as renderResults - the name and phone are scraped
+    // text, so they go in as textContent rather than concatenated HTML
+    var popup = document.createElement("div");
 
-    polygon.bindPopup(popupText);
+    var popupName = document.createElement("b");
+    popupName.textContent = result.name;
+    popup.appendChild(popupName);
+    popup.appendChild(document.createElement("br"));
+
+    var popupLine = document.createElement("span");
+    if (result.inside) {
+      popupLine.style.color = "#C81E4B";
+      popupLine.style.fontWeight = "600";
+      popupLine.textContent = "Reference point is inside this zone";
+    } else {
+      popupLine.textContent = result.dist.toFixed(1) + " km away";
+    }
+    popup.appendChild(popupLine);
+
+    var popupPhone = document.createElement("div");
+    popupPhone.className = "map-popup-phone";
+    popupPhone.textContent = result.phone;
+    popup.appendChild(popupPhone);
+
+    polygon.bindPopup(popup);
     mapLayers.push(polygon);
   }
 
@@ -1845,19 +1994,27 @@ function renderAirstrips(strips) {
   var list = document.getElementById("airstripList");
   var countEl = document.getElementById("airstripCount");
 
-  // no data file loaded - hide the panel entirely rather than claiming
-  // there's nothing nearby
-  if (allAirstrips.length === 0) {
-    panel.style.display = "none";
+  // "not loaded yet" and "loaded, none nearby" used to be indis-
+  // tinguishable, because both showed as an empty list. say which
+  panel.style.display = "block";
+  countEl.textContent = airstripsLoaded ? "(" + strips.length + ")" : "";
+  list.innerHTML = "";
+
+  if (!airstripsLoaded) {
+    var stripNote = document.createElement("p");
+    stripNote.className = "empty-note";
+    stripNote.textContent = airstripLoadFailed
+      ? "Advisory airstrip list could not be loaded, so nothing was checked. The legal zones above are unaffected."
+      : "Advisory airstrip list is still loading - run the check again in a moment.";
+    list.appendChild(stripNote);
     return;
   }
 
-  panel.style.display = "block";
-  countEl.textContent = "(" + strips.length + ")";
-  list.innerHTML = "";
-
   if (strips.length === 0) {
-    list.innerHTML = '<p class="empty-note">None within ' + AIRSTRIP_RADIUS_KM + ' km.</p>';
+    var noneNote = document.createElement("p");
+    noneNote.className = "empty-note";
+    noneNote.textContent = "None within " + AIRSTRIP_RADIUS_KM + " km.";
+    list.appendChild(noneNote);
     return;
   }
 
@@ -1893,7 +2050,19 @@ function renderAirstrips(strips) {
 // search point falls inside that circle
 // ---------------------------------------------------------------------------
 
-// "2026-08-24T06:00:00" -> "24 Aug 2026 06:00"
+var MONTH_NAMES = ["Jan", "Feb", "Mar", "Apr", "May", "Jun",
+                   "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
+
+// "2026-08-24T06:00:00Z" -> "24 Aug 2026 06:00 UTC"
+//
+// NOTAM times are ALWAYS UTC and are read as UTC by everyone who flies,
+// so they are displayed as UTC here and labelled as such.
+//
+// The build script now writes the "Z". It is load-bearing: a browser
+// parsing "2026-08-24T06:00:00" with no offset treats it as LOCAL time,
+// which through British Summer Time shifted every NOTAM by an hour and
+// expired them an hour early. If you ever see a NOTAM time here without
+// the UTC label, the data file is stale - re-run pull_notams.py.
 function formatNotamDate(isoText) {
   if (!isoText) {
     return "unknown";
@@ -1904,10 +2073,37 @@ function formatNotamDate(isoText) {
     return isoText;  // couldn't parse it - show the raw value rather than nothing
   }
 
-  var months = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
+  var hasZone = /[Zz]$|[+\-]\d{2}:?\d{2}$/.test(isoText.trim());
+
+  var day = String(date.getUTCDate()).padStart(2, "0");
+  var month = MONTH_NAMES[date.getUTCMonth()];
+  var year = date.getUTCFullYear();
+  var hours = String(date.getUTCHours()).padStart(2, "0");
+  var minutes = String(date.getUTCMinutes()).padStart(2, "0");
+
+  var stamp = day + " " + month + " " + year + " " + hours + ":" + minutes;
+
+  // if the source string carried no timezone we cannot honestly call
+  // the result UTC, so say the timezone is unknown rather than lying
+  return stamp + (hasZone ? " UTC" : " (timezone not stated)");
+}
+
+// for OUR OWN timestamps - "when did the refresh script last run" -
+// which are local wall-clock events, not NOTAM times. the build scripts
+// write these with an explicit UTC offset, so this renders them in the
+// reader's local time correctly.
+function formatLocalDate(isoText) {
+  if (!isoText) {
+    return "unknown";
+  }
+
+  var date = new Date(isoText);
+  if (isNaN(date.getTime())) {
+    return isoText;
+  }
 
   var day = String(date.getDate()).padStart(2, "0");
-  var month = months[date.getMonth()];
+  var month = MONTH_NAMES[date.getMonth()];
   var year = date.getFullYear();
   var hours = String(date.getHours()).padStart(2, "0");
   var minutes = String(date.getMinutes()).padStart(2, "0");
@@ -1918,14 +2114,46 @@ function formatNotamDate(isoText) {
 // flight levels in the feed are already "hundreds of feet" (Lower=2 means
 // 200ft) - not the FL0xx notation used in text NOTAMs, so no /100 needed
 function formatFlightLevels(lowerText, upperText) {
-  if (!lowerText && !upperText) {
+  // each side is formatted independently. the old version only bailed
+  // out when BOTH were missing, so one missing limit rendered as the
+  // literal string "null00ft"
+  var lowerFt = describeLevel(lowerText, "SFC");
+  var upperFt = describeLevel(upperText, null);
+
+  if (lowerFt === null && upperFt === null) {
     return "";
   }
 
-  var lowerFt = (lowerText === "0") ? "SFC" : lowerText + "00ft";
-  var upperFt = (upperText === "999") ? "unltd" : upperText + "00ft";
+  if (lowerFt === null) {
+    return "up to " + upperFt;
+  }
+  if (upperFt === null) {
+    return lowerFt + " and above";
+  }
 
   return lowerFt + " - " + upperFt;
+}
+
+// one limit, in hundreds of feet, as text. returns null if there isn't
+// a usable value rather than pasting "null" or "undefined" into the page
+function describeLevel(text, zeroLabel) {
+  if (text === null || text === undefined || text === "") {
+    return null;
+  }
+
+  var value = parseInt(text, 10);
+  if (isNaN(value)) {
+    return null;
+  }
+
+  if (value === 0 && zeroLabel) {
+    return zeroLabel;
+  }
+  if (value >= 999) {
+    return "unltd";
+  }
+
+  return (value * 100) + "ft";
 }
 
 // does this NOTAM's lower limit sit low enough to matter to a UAS
@@ -1949,10 +2177,22 @@ function findRelevantNotams(refLat, refLon) {
   while (i < allNotams.length) {
     var notam = allNotams[i];
 
-    // cheap box check before the full geodesic calculation - a NOTAM's
-    // radius is at most a few hundred km, so anything more than ~3
-    // degrees away in either axis cannot possibly be inside it
-    if (Math.abs(notam.lat - refLat) > 3 || Math.abs(notam.lon - refLon) > 5) {
+    // cheap box check before the full geodesic calculation.
+    //
+    // this used to be a flat 3 degrees of latitude / 5 of longitude, on
+    // the assumption that "a NOTAM's radius is at most a few hundred km".
+    // It isn't. The feed routinely carries 999 NM (about 1850 km) radii
+    // for FIR-wide items, and a fixed box threw those away before the
+    // distance test ever ran - about a quarter of the real matches at a
+    // typical UK location, silently.
+    //
+    // size the box from THIS NOTAM's radius instead, so the test can
+    // only ever reject something that genuinely cannot reach us.
+    var latPadDeg = (notam.radius_m / M_PER_DEG_LAT) * 1.05;
+    var lonPadDeg = lonDegreesFor(notam.radius_m, refLat);
+
+    if (Math.abs(notam.lat - refLat) > latPadDeg ||
+        Math.abs(notam.lon - refLon) > lonPadDeg) {
       i = i + 1;
       continue;
     }
@@ -1997,7 +2237,8 @@ function findRelevantNotams(refLat, refLon) {
       start: notam.start,
       end: notam.end,
       status: status,
-      distM: distM
+      distM: distM,
+      coordPrecision: notam.coord_precision || "qline_1min"
     });
 
     i = i + 1;
@@ -2026,19 +2267,28 @@ function renderNotams(notams) {
     ? "this data is valid until " + formatNotamDate(notamValidTo)
     : "the data's validity window";
 
-  // no data file loaded - hide the panel entirely rather than implying
-  // "no NOTAMs" when really nothing was checked
-  if (allNotams.length === 0) {
-    panel.style.display = "none";
+  panel.style.display = "block";
+  countEl.textContent = notamsLoaded ? "(" + notams.length + ")" : "";
+  list.innerHTML = "";
+
+  // "not loaded yet" and "loaded, none relevant" used to look identical
+  // (the whole panel just vanished), which reads as "all clear" when it
+  // actually means "nothing was checked"
+  if (!notamsLoaded) {
+    var notamNote = document.createElement("p");
+    notamNote.className = "empty-note";
+    notamNote.textContent = notamLoadFailed
+      ? "NOTAM list could not be loaded, so NO NOTAM CHECK WAS DONE. Get a proper pre-flight briefing."
+      : "NOTAM list is still loading - run the check again in a moment.";
+    list.appendChild(notamNote);
     return;
   }
 
-  panel.style.display = "block";
-  countEl.textContent = "(" + notams.length + ")";
-  list.innerHTML = "";
-
   if (notams.length === 0) {
-    list.innerHTML = '<p class="empty-note">None found affecting this location.</p>';
+    var emptyNote = document.createElement("p");
+    emptyNote.className = "empty-note";
+    emptyNote.textContent = "None found affecting this location.";
+    list.appendChild(emptyNote);
     return;
   }
 
@@ -2066,12 +2316,29 @@ function renderNotams(notams) {
       formatNotamDate(n.start) + " \u2192 " + formatNotamDate(n.end) +
       (flText ? "  \u00B7  Height: " + flText : "");
 
+    // a NOTAM positioned only from the Q-line is good to about 1.85 km.
+    // for a small-radius item that is bigger than the radius itself, so
+    // "you are inside this one" is close to a coin toss. say so instead
+    // of presenting every hit with the same confidence.
+    var precisionNote = null;
+    if (n.coordPrecision !== "iteme_1sec") {
+      precisionNote = document.createElement("div");
+      precisionNote.className = "notam-meta";
+      precisionNote.textContent =
+        "Position from the Q-line only, accurate to about 1.9 km" +
+        (n.distM < 3000 ? " - you are " + (n.distM / 1000).toFixed(1) +
+         " km from its stated centre, which is within that margin" : "");
+    }
+
     var body = document.createElement("div");
     body.className = "notam-text";
     body.textContent = n.text;  // NOTAM text is free-form data, not trusted markup
 
     row.appendChild(head);
     row.appendChild(meta);
+    if (precisionNote) {
+      row.appendChild(precisionNote);
+    }
     row.appendChild(body);
     list.appendChild(row);
 
@@ -2113,7 +2380,7 @@ function updateRefreshedChip(chipId, label, isoText) {
     return;
   }
 
-  chip.textContent = label + ": " + formatNotamDate(isoText) + " (" + timeAgo(isoText) + ")";
+  chip.textContent = label + ": " + formatLocalDate(isoText) + " (" + timeAgo(isoText) + ")";
 }
 
 
@@ -2127,7 +2394,10 @@ function renderResults(panelId, listId, countId, results) {
   list.innerHTML = "";
 
   if (results.length === 0) {
-    list.innerHTML = '<p class="empty-note">None found within ' + RADIUS_KM + ' km.</p>';
+    var none = document.createElement("p");
+    none.className = "empty-note";
+    none.textContent = "None found within " + RADIUS_KM + " km.";
+    list.appendChild(none);
     return;
   }
 
@@ -2138,33 +2408,67 @@ function renderResults(panelId, listId, countId, results) {
     var row = document.createElement("div");
     row.className = "zone-row" + (r.inside ? " inside" : "");
 
-    var compassHTML;
+    // built as elements, not as an innerHTML string. r.name and
+    // r.phone come from the NATS notes and the atcadvisor scrape, so
+    // they are third-party text - a stray "&" or "<" in a scraped
+    // number used to be enough to mangle the row. everywhere else in
+    // this file already uses textContent for scraped data
+    var compass = document.createElement("div");
     if (r.inside) {
-      compassHTML = '<div class="compass inside-marker"></div>';
+      compass.className = "compass inside-marker";
     } else {
-      compassHTML = '<div class="compass"><div class="needle" style="transform: rotate(' + r.bearing + 'deg);"></div></div>';
+      compass.className = "compass";
+      var needle = document.createElement("div");
+      needle.className = "needle";
+      needle.style.transform = "rotate(" + r.bearing + "deg)";
+      compass.appendChild(needle);
     }
 
-    var phoneHTML;
+    var middle = document.createElement("div");
+
+    var nameEl = document.createElement("div");
+    nameEl.className = "zone-name";
+    nameEl.textContent = r.name;
+
+    var phoneEl = document.createElement("div");
+    phoneEl.className = "zone-phone";
+
     if (r.phone === "No number available." || r.phone === "") {
-      phoneHTML = '<span class="no-number">no number available</span>';
+      var noNumber = document.createElement("span");
+      noNumber.className = "no-number";
+      noNumber.textContent = "no number available";
+      phoneEl.appendChild(noNumber);
     } else {
-      phoneHTML = r.phone;
+      phoneEl.textContent = r.phone;
     }
 
-    var distHTML;
+    middle.appendChild(nameEl);
+    middle.appendChild(phoneEl);
+
+    var distEl = document.createElement("div");
+    distEl.className = "zone-dist";
+
     if (r.inside) {
-      distHTML = '<span class="inside-tag">INSIDE THIS ZONE</span>';
+      var insideTag = document.createElement("span");
+      insideTag.className = "inside-tag";
+      insideTag.textContent = "INSIDE THIS ZONE";
+      distEl.appendChild(insideTag);
     } else {
-      var kmText = r.dist.toFixed(1) + " km";
-      var bearingText = String(Math.round(r.bearing) % 360).padStart(3, "0") + "°";
-      distHTML = '<span class="km">' + kmText + '</span><span class="bearing">' + bearingText + '</span>';
+      var kmEl = document.createElement("span");
+      kmEl.className = "km";
+      kmEl.textContent = r.dist.toFixed(1) + " km";
+
+      var bearingEl = document.createElement("span");
+      bearingEl.className = "bearing";
+      bearingEl.textContent = String(Math.round(r.bearing) % 360).padStart(3, "0") + "\u00B0";
+
+      distEl.appendChild(kmEl);
+      distEl.appendChild(bearingEl);
     }
 
-    row.innerHTML =
-      compassHTML +
-      '<div><div class="zone-name">' + r.name + '</div><div class="zone-phone">' + phoneHTML + '</div></div>' +
-      '<div class="zone-dist">' + distHTML + '</div>';
+    row.appendChild(compass);
+    row.appendChild(middle);
+    row.appendChild(distEl);
 
     list.appendChild(row);
     i = i + 1;
@@ -2225,6 +2529,13 @@ while (b < copyButtons.length) {
   });
   b = b + 1;
 }
+
+// the altitude threshold appears in two bits of copy that used to
+// disagree with each other and with the code. both are written from the
+// single constant now.
+document.getElementById("notamAltHeading").textContent = UAS_MAX_ALTITUDE_M + " m";
+document.getElementById("notamAltNote").textContent =
+  UAS_MAX_ALTITUDE_M + " m (" + UAS_MAX_ALTITUDE_FT + " ft)";
 
 loadData();
 loadTowerData();
