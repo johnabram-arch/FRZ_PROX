@@ -422,6 +422,59 @@
     border: 1.5px solid var(--rule);
   }
 
+  .map-legend {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 10px 18px;
+    margin-top: 14px;
+    padding-top: 14px;
+    border-top: 1px solid var(--rule-soft);
+  }
+
+  .legend-item {
+    display: flex;
+    align-items: center;
+    gap: 7px;
+    font-size: 12.5px;
+    color: var(--ink-soft);
+    white-space: nowrap;
+  }
+
+  .legend-swatch {
+    flex-shrink: 0;
+    width: 16px;
+    height: 16px;
+    border-radius: 3px;
+    box-sizing: border-box;
+  }
+
+  /* filled shapes - FRZ/RPZ, NSA, inside-zone, active/upcoming NOTAM */
+  .legend-swatch.fill-frz    { background: rgba(200,30,75,0.2);  border: 1.5px solid #C81E4B; }
+  .legend-swatch.fill-inside { background: rgba(200,30,75,0.45); border: 2px solid #C81E4B; }
+  .legend-swatch.fill-nsa    { background: rgba(74,90,120,0.2);  border: 1.5px solid #4A5A78; }
+  .legend-swatch.fill-notam  { background: rgba(200,122,30,0.2); border: 2px solid #C87A1E; }
+  .legend-swatch.fill-upcoming { background: rgba(139,127,107,0.2); border: 2px solid #8B7F6B; }
+
+  /* line-only shapes - search radius, wide-area NOTAM circle, reference point */
+  .legend-swatch.line-radius {
+    border: 1.5px dashed #1B2A4A;
+    border-radius: 50%;
+    background: transparent;
+  }
+  .legend-swatch.line-wide {
+    border: 1.5px dashed #C87A1E;
+    border-radius: 50%;
+    background: transparent;
+  }
+  .legend-swatch.dot-reference {
+    border-radius: 50%;
+    background: #3388ff;
+    border: 1.5px solid #1B2A4A;
+    width: 12px;
+    height: 12px;
+    margin: 2px;
+  }
+
   .copy-intro {
     font-size: 13px;
     color: var(--ink-soft);
@@ -613,6 +666,16 @@
   <div class="panel" id="mapPanel">
     <h2>Map</h2>
     <div id="map"></div>
+    <div class="map-legend">
+      <span class="legend-item"><span class="legend-swatch dot-reference"></span>Reference point</span>
+      <span class="legend-item"><span class="legend-swatch line-radius"></span>50 km search boundary</span>
+      <span class="legend-item"><span class="legend-swatch fill-frz"></span>FRZ / RPZ</span>
+      <span class="legend-item"><span class="legend-swatch fill-nsa"></span>NSA (military / government / prison)</span>
+      <span class="legend-item"><span class="legend-swatch fill-inside"></span>Reference point is inside this zone</span>
+      <span class="legend-item"><span class="legend-swatch fill-notam"></span>NOTAM &mdash; active</span>
+      <span class="legend-item"><span class="legend-swatch fill-upcoming"></span>NOTAM &mdash; upcoming</span>
+      <span class="legend-item"><span class="legend-swatch line-wide"></span>NOTAM &mdash; wide area (outline only, not a precise location)</span>
+    </div>
   </div>
 
   <div class="panel" id="missingNumbersPanel" style="display:none;">
