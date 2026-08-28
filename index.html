@@ -719,6 +719,19 @@
     <div id="notamList"></div>
   </div>
 
+  <div class="panel results" id="regionalNotamPanel" style="display:none;">
+    <h2>Nationwide / regional notices <span class="count" id="regionalNotamCount"></span></h2>
+    <div class="notam-warning">
+      These use a single point and a very large radius (nationwide or
+      FIR-wide) because the NOTAM format requires SOME location even
+      when the notice isn't about a specific place - security notices,
+      chart amendments, and similar. They apply everywhere in the UK
+      regardless of the coordinates you check, so they are listed once
+      here rather than repeated identically for every search.
+    </div>
+    <div id="regionalNotamList"></div>
+  </div>
+
   <footer>
     Data: NATS UK Digital Datasets &amp; atcadvisor.com &middot; built for internal planning use
   </footer>
@@ -763,9 +776,10 @@ var SUGGEST_EMAIL = "jabram@sees.ai";
 
 var allZones = [];
 var allAirstrips = [];  // advisory only - plain points, no rings
-var allNotams = [];     // advisory only - circles, not polygons
+var allNotams = [];      // local notams only - see indexNotams()
+var regionalNotams = []; // nationwide/FIR-wide notices - not location-specific
 var notamValidTo = null;
-var notamMaxRadiusM = 0;  // biggest radius in the file, for the box check
+var notamMaxRadiusM = 0;  // biggest LOCAL radius, for the box check
 
 // "haven't loaded yet" and "loaded, and there genuinely aren't any" look
 // identical if you only check .length. these tell them apart, so a check
@@ -1076,25 +1090,31 @@ function loadNotams() {
       return response.json();
     })
     .then(function (data) {
-      allNotams = data.notams;
+      var split = indexNotams(data.notams);
+      allNotams = split.local;
+      regionalNotams = split.regional;
+
       notamValidTo = data.valid_to;
       notamGeneratedAt = data.generated_at || null;
       notamsLoaded = true;
 
-      // how wide the pre-filter box has to be. the build script reports
-      // the largest radius in the file; work it out here too in case
-      // we're reading an older file that doesn't carry the field
-      notamMaxRadiusM = data.max_radius_m || 0;
+      // how wide the pre-filter box has to be, over LOCAL notams only -
+      // a regional one's huge radius must never widen this, or it drags
+      // the "does this need the full Vincenty check" box back out to
+      // "everywhere", defeating the point of separating them at all
+      notamMaxRadiusM = 0;
       for (var m = 0; m < allNotams.length; m++) {
         if (allNotams[m].radius_m > notamMaxRadiusM) {
           notamMaxRadiusM = allNotams[m].radius_m;
         }
       }
 
+      renderRegionalNotams(regionalNotams);
       updateRefreshedChip("notamRefreshedChip", "NOTAMs refreshed", notamGeneratedAt);
     })
     .catch(function (error) {
       allNotams = [];
+      regionalNotams = [];
       notamsLoaded = false;
       notamLoadFailed = true;
       console.warn("NOTAM list unavailable:", error);
@@ -1179,6 +1199,81 @@ function zoneCouldBeInRange(zone, refLat, refLon) {
   if (refLon < zone.bbox.minLon - lonPad) return false;
   if (refLon > zone.bbox.maxLon + lonPad) return false;
 
+  return true;
+}
+
+// splits the raw NOTAM list into "local" (a real place, checked
+// against the reference point same as an FRZ zone) and "regional"
+// (nationwide/FIR-wide notices using a huge circle only because the
+// format requires SOME point+radius - see is_regional in
+// pull_notams.py for how that's decided, and why it's decided there
+// rather than re-guessed here).
+//
+// also precomputes, once per data load, exactly what indexZones() does
+// for FRZ zones: a bounding box for every polygon-shaped NOTAM, and a
+// closed copy of its ring, so a location check doesn't run Vincenty
+// over vertices that plainly aren't nearby.
+function indexNotams(notams) {
+  var local = [];
+  var regional = [];
+
+  for (var i = 0; i < notams.length; i++) {
+    var notam = notams[i];
+
+    if (notam.is_regional) {
+      regional.push(notam);
+      continue;
+    }
+
+    if (notam.shape === "polygon" && notam.polygon && notam.polygon.length > 0) {
+      var ring = notam.polygon;
+      var first = ring[0];
+      var last = ring[ring.length - 1];
+      if (first[0] !== last[0] || first[1] !== last[1]) {
+        ring = ring.concat([[first[0], first[1]]]);
+      }
+      notam.closedPolygon = ring;
+
+      var minLon = ring[0][0], maxLon = ring[0][0];
+      var minLat = ring[0][1], maxLat = ring[0][1];
+      for (var j = 1; j < ring.length; j++) {
+        if (ring[j][0] < minLon) minLon = ring[j][0];
+        if (ring[j][0] > maxLon) maxLon = ring[j][0];
+        if (ring[j][1] < minLat) minLat = ring[j][1];
+        if (ring[j][1] > maxLat) maxLat = ring[j][1];
+      }
+      notam.bbox = { minLon: minLon, maxLon: maxLon, minLat: minLat, maxLat: maxLat };
+    }
+
+    local.push(notam);
+  }
+
+  return { local: local, regional: regional };
+}
+
+// same idea as zoneCouldBeInRange, but sized from the NOTAM's own
+// radius (circle) or precomputed bbox (polygon) rather than a fixed
+// search radius, since every NOTAM has a different footprint
+function notamCouldBeInRange(notam, refLat, refLon) {
+  if (notam.shape === "polygon" && notam.bbox) {
+    // polygons in this feed are all local and modest in size, but pad
+    // generously anyway - a missed real match costs nothing here,
+    // while a wrongly-dropped one hides a genuine restriction
+    var latPad = 2000 / M_PER_DEG_LAT;
+    var lonPad = lonDegreesFor(2000, refLat);
+
+    if (refLat < notam.bbox.minLat - latPad) return false;
+    if (refLat > notam.bbox.maxLat + latPad) return false;
+    if (refLon < notam.bbox.minLon - lonPad) return false;
+    if (refLon > notam.bbox.maxLon + lonPad) return false;
+    return true;
+  }
+
+  var latPadDeg = (notam.radius_m / M_PER_DEG_LAT) * 1.05;
+  var lonPadDeg = lonDegreesFor(notam.radius_m, refLat);
+
+  if (Math.abs(notam.lat - refLat) > latPadDeg) return false;
+  if (Math.abs(notam.lon - refLon) > lonPadDeg) return false;
   return true;
 }
 
@@ -1535,14 +1630,15 @@ function runCheck() {
   renderResults("frzPanel", "frzList", "frzCount", normalResults);
   renderResults("nsaPanel", "nsaList", "nsaCount", nsaResults);
   renderAirstrips(findNearbyAirstrips(refLat, refLon));
-  renderNotams(findRelevantNotams(refLat, refLon));
+  var relevantNotams = findRelevantNotams(refLat, refLon);
+  renderNotams(relevantNotams);
   renderMissingNumbers(normalResults, nsaResults);
   buildCopyLists(normalResults, nsaResults);
 
   // the map goes last and is wrapped up safely - if anything goes wrong
   // drawing it, the results and copy lists above must still work
   try {
-    renderMap(refLat, refLon, normalResultsForMap, nsaResultsForMap);
+    renderMap(refLat, refLon, normalResultsForMap, nsaResultsForMap, relevantNotams);
   } catch (error) {
     console.error("could not draw the map:", error);
     var mapStatus = document.getElementById("statusLine");
@@ -1842,7 +1938,8 @@ function initMap() {
 // ---------------------------------------------------------------------------
 // the map - reference point, 50km radius, and the zone shapes themselves
 // ---------------------------------------------------------------------------
-function renderMap(refLat, refLon, normalResults, nsaResults) {
+function renderMap(refLat, refLon, normalResults, nsaResults, notamResults) {
+  notamResults = notamResults || [];
   // if the map failed to start up there's nothing to draw on
   if (map === null) {
     console.warn("no map to draw on - initMap() must have failed");
@@ -1941,6 +2038,75 @@ function renderMap(refLat, refLon, normalResults, nsaResults) {
   k = 0;
   while (k < nsaResults.length) {
     drawZone(nsaResults[k], true);
+    k = k + 1;
+  }
+
+  // draws one NOTAM's shape - a polygon where the free text gave us
+  // one (see parse_polygon_from_text in pull_notams.py), a circle
+  // otherwise. This is the actual "notaminfo-style" behaviour: a
+  // location-specific NOTAM plotted as a real shape on the map rather
+  // than only appearing as a line of text below it.
+  //
+  // circles above OUTLINE_ONLY_RADIUS_M are drawn unfilled, matching
+  // notaminfo.com's own convention (see notaminfo.com/maphelp - they
+  // stop filling circles at 10 NM for the same reason: a filled
+  // shape that size doesn't mean "here", it just paints over the map).
+  // Nationwide/FIR-wide notices don't reach this function at all - see
+  // indexNotams() - they're excluded before any of this runs.
+  var OUTLINE_ONLY_RADIUS_M = 18520; // 10 NM
+
+  function drawNotam(notam) {
+    var color = notam.status === "upcoming" ? "#8B7F6B" : "#C87A1E";
+
+    var shape;
+    if (notam.shape === "polygon" && notam.ring && notam.ring.length > 0) {
+      var latLngs = [];
+      for (var v = 0; v < notam.ring.length; v++) {
+        latLngs.push([notam.ring[v][1], notam.ring[v][0]]);
+      }
+      shape = L.polygon(latLngs, {
+        color: color,
+        weight: 2,
+        fillOpacity: 0.2
+      }).addTo(map);
+    } else {
+      var bigCircle = notam.radiusM > OUTLINE_ONLY_RADIUS_M;
+      shape = L.circle([notam.lat, notam.lon], {
+        radius: notam.radiusM,
+        color: color,
+        weight: bigCircle ? 1.5 : 2,
+        fillOpacity: bigCircle ? 0 : 0.15,
+        dashArray: bigCircle ? "6 6" : null
+      }).addTo(map);
+    }
+
+    var popup = document.createElement("div");
+
+    var popupTitle = document.createElement("b");
+    popupTitle.textContent = notam.id + (notam.aerodrome ? " \u00B7 " + notam.aerodrome : "");
+    popup.appendChild(popupTitle);
+    popup.appendChild(document.createElement("br"));
+
+    var popupStatus = document.createElement("span");
+    popupStatus.style.color = color;
+    popupStatus.style.fontWeight = "600";
+    popupStatus.textContent = notam.status === "upcoming" ? "UPCOMING" : "ACTIVE";
+    popup.appendChild(popupStatus);
+
+    var popupText = document.createElement("div");
+    popupText.className = "map-popup-phone";
+    popupText.style.maxWidth = "260px";
+    popupText.style.whiteSpace = "pre-wrap";
+    popupText.textContent = notam.text;
+    popup.appendChild(popupText);
+
+    shape.bindPopup(popup);
+    mapLayers.push(shape);
+  }
+
+  k = 0;
+  while (k < notamResults.length) {
+    drawNotam(notamResults[k]);
     k = k + 1;
   }
 
@@ -2173,26 +2339,42 @@ function findRelevantNotams(refLat, refLon) {
   var now = new Date();
   var found = [];
 
+  // is the search point actually inside this NOTAM? for a circle,
+  // distance-to-centre vs radius, same as before. for a polygon - one
+  // parsed from "WI AREA BOUNDED BY ..." in the free text - reuse the
+  // exact same edge-walking test already used for FRZ zones, since a
+  // NOTAM boundary and a zone boundary are the same kind of shape.
+  // returns { inside: bool, distM: number } either way, so the rest of
+  // this function doesn't need to know which kind it got.
+  function checkNotamShape(notam) {
+    if (notam.shape === "polygon" && notam.closedPolygon) {
+      var ringXY = [];
+      for (var v = 0; v < notam.closedPolygon.length; v++) {
+        var vlon = notam.closedPolygon[v][0];
+        var vlat = notam.closedPolygon[v][1];
+        ringXY.push(toLocalXY(vlon, vlat, refLon, refLat));
+      }
+
+      if (pointInRing(ringXY)) {
+        return { inside: true, distM: 0 };
+      }
+
+      var nearest = nearestPointOnRing(ringXY);
+      return { inside: false, distM: nearest[0] };
+    }
+
+    var result = vincentyDistanceAndBearing(refLat, refLon, notam.lat, notam.lon);
+    return { inside: result[0] <= notam.radius_m, distM: result[0] };
+  }
+
   var i = 0;
   while (i < allNotams.length) {
     var notam = allNotams[i];
 
-    // cheap box check before the full geodesic calculation.
-    //
-    // this used to be a flat 3 degrees of latitude / 5 of longitude, on
-    // the assumption that "a NOTAM's radius is at most a few hundred km".
-    // It isn't. The feed routinely carries 999 NM (about 1850 km) radii
-    // for FIR-wide items, and a fixed box threw those away before the
-    // distance test ever ran - about a quarter of the real matches at a
-    // typical UK location, silently.
-    //
-    // size the box from THIS NOTAM's radius instead, so the test can
-    // only ever reject something that genuinely cannot reach us.
-    var latPadDeg = (notam.radius_m / M_PER_DEG_LAT) * 1.05;
-    var lonPadDeg = lonDegreesFor(notam.radius_m, refLat);
-
-    if (Math.abs(notam.lat - refLat) > latPadDeg ||
-        Math.abs(notam.lon - refLon) > lonPadDeg) {
+    // cheap box check before the full geodesic/polygon calculation -
+    // sized from this NOTAM's own footprint (see notamCouldBeInRange),
+    // not a fixed guess at how big NOTAMs get
+    if (!notamCouldBeInRange(notam, refLat, refLon)) {
       i = i + 1;
       continue;
     }
@@ -2202,11 +2384,14 @@ function findRelevantNotams(refLat, refLon) {
       continue;  // starts too high to matter for low-level UAS ops
     }
 
-    var result = vincentyDistanceAndBearing(refLat, refLon, notam.lat, notam.lon);
-    var distM = result[0];
+    var shapeResult = checkNotamShape(notam);
+    var distM = shapeResult.distM;
 
-    // "relevant" = the search point falls inside the NOTAM's circle
-    if (distM > notam.radius_m) {
+    // "relevant" = the search point falls inside the NOTAM's shape.
+    // note a polygon's distM when NOT inside is distance to the
+    // nearest edge, which is exactly what "how far away is it" should
+    // mean - same convention nearestPointOnRing already uses for zones
+    if (!shapeResult.inside) {
       i = i + 1;
       continue;
     }
@@ -2238,7 +2423,16 @@ function findRelevantNotams(refLat, refLon) {
       end: notam.end,
       status: status,
       distM: distM,
-      coordPrecision: notam.coord_precision || "qline_1min"
+      coordPrecision: notam.coord_precision || "qline_1min",
+      // geometry, so the map can draw the actual shape rather than
+      // just showing this as a line of text - "ring" and "radiusM"
+      // are carried separately from the raw notam.polygon/radius_m so
+      // the map-drawing code doesn't need to know the JSON field names
+      shape: notam.shape || "circle",
+      ring: notam.closedPolygon || null,
+      lat: notam.lat,
+      lon: notam.lon,
+      radiusM: notam.radius_m
     });
 
     i = i + 1;
@@ -2254,6 +2448,52 @@ function findRelevantNotams(refLat, refLon) {
   });
 
   return found;
+}
+
+
+// nationwide/FIR-wide notices - same on every search, so rendered once
+// at load time rather than recomputed on every check. see is_regional
+// in pull_notams.py for how these are identified.
+function renderRegionalNotams(notams) {
+  var panel = document.getElementById("regionalNotamPanel");
+  var list = document.getElementById("regionalNotamList");
+  var countEl = document.getElementById("regionalNotamCount");
+
+  if (!notams || notams.length === 0) {
+    panel.style.display = "none";
+    return;
+  }
+
+  panel.style.display = "block";
+  countEl.textContent = "(" + notams.length + ")";
+  list.innerHTML = "";
+
+  for (var i = 0; i < notams.length; i++) {
+    var n = notams[i];
+
+    var row = document.createElement("div");
+    row.className = "notam-row";
+
+    var head = document.createElement("div");
+    head.className = "notam-head";
+    var idSpan = document.createElement("span");
+    idSpan.className = "notam-id";
+    idSpan.textContent = n.id + (n.aerodrome ? " \u00B7 " + n.aerodrome : "");
+    head.appendChild(idSpan);
+
+    var meta = document.createElement("div");
+    meta.className = "notam-meta";
+    meta.textContent = formatNotamDate(n.start) + " \u2192 " + formatNotamDate(n.end);
+
+    var body = document.createElement("div");
+    body.className = "notam-text";
+    body.textContent = n.text;
+
+    row.appendChild(head);
+    row.appendChild(meta);
+    row.appendChild(body);
+    list.appendChild(row);
+  }
 }
 
 
@@ -2320,8 +2560,13 @@ function renderNotams(notams) {
     // for a small-radius item that is bigger than the radius itself, so
     // "you are inside this one" is close to a coin toss. say so instead
     // of presenting every hit with the same confidence.
+    //
+    // "polygon" and "iteme_1sec" both mean a real position was found in
+    // the NOTAM's own text - a plotted boundary is if anything MORE
+    // trustworthy than a single to-the-second point, so both are
+    // excluded from this warning. Only the qline_1min fallback gets it.
     var precisionNote = null;
-    if (n.coordPrecision !== "iteme_1sec") {
+    if (n.coordPrecision !== "iteme_1sec" && n.coordPrecision !== "polygon") {
       precisionNote = document.createElement("div");
       precisionNote.className = "notam-meta";
       precisionNote.textContent =
