@@ -1,0 +1,4 @@
+working_files/
+__pycache__/
+*.pyc
+refresh_log.txt
