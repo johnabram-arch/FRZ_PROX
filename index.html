@@ -709,11 +709,13 @@
   </div>
 
   <div class="panel results" id="notamPanel" style="display:none;">
-    <h2>NOTAMs affecting this area <span class="count" id="notamCount"></span></h2>
+    <h2>NOTAMs below 200m affecting this area <span class="count" id="notamCount"></span></h2>
     <div class="notam-warning">
       <strong>Unofficial, best-effort.</strong> Sourced from NATS' contingency
-      briefing feed, not a purpose-built API. Trigger NOTAMs are valid for two
-      weeks only, and this data goes stale between updates - check
+      briefing feed, not a purpose-built API. Filtered to NOTAMs starting at
+      or below 656ft (200m) - anything higher won't affect a UAS flying
+      beneath it, so it's left out. Trigger NOTAMs are valid for two weeks
+      only, and this data goes stale between updates - check
       <span id="notamDataAge"></span>. This is not a substitute for a proper
       pre-flight NOTAM briefing.
     </div>
@@ -741,6 +743,12 @@ var RADIUS_KM = 50;
 var AIRSTRIP_RADIUS_KM = 5;
 
 var NOTAM_FILE = "notam_data.json";
+
+// only show NOTAMs whose lower limit is at or below this - anything that
+// starts higher than this can't affect a UAS flying beneath it.
+// 200m = 656.17 ft; the feed's lower_fl is already in hundreds of feet
+// (e.g. "6" means 600ft), so this stays in plain feet for the comparison
+var UAS_MAX_ALTITUDE_FT = 656;
 
 // where "numbers needed" suggestions get emailed
 var SUGGEST_EMAIL = "jabram@sees.ai";
@@ -1924,6 +1932,19 @@ function formatFlightLevels(lowerText, upperText) {
   return lowerFt + " - " + upperFt;
 }
 
+// does this NOTAM's lower limit sit low enough to matter to a UAS
+// flying at or below UAS_MAX_ALTITUDE_FT? if the lower limit can't be
+// read at all, we include it rather than risk hiding something real -
+// only a NOTAM we can positively confirm starts higher gets excluded
+function isRelevantAltitude(lowerFlText) {
+  var lowerVal = parseInt(lowerFlText, 10);
+  if (isNaN(lowerVal)) {
+    return true;
+  }
+  return (lowerVal * 100) <= UAS_MAX_ALTITUDE_FT;
+}
+
+
 function findRelevantNotams(refLat, refLon) {
   var now = new Date();
   var found = [];
@@ -1938,6 +1959,11 @@ function findRelevantNotams(refLat, refLon) {
     if (Math.abs(notam.lat - refLat) > 3 || Math.abs(notam.lon - refLon) > 5) {
       i = i + 1;
       continue;
+    }
+
+    if (!isRelevantAltitude(notam.lower_fl)) {
+      i = i + 1;
+      continue;  // starts too high to matter for low-level UAS ops
     }
 
     var result = vincentyDistanceAndBearing(refLat, refLon, notam.lat, notam.lon);
@@ -2042,7 +2068,7 @@ function renderNotams(notams) {
     var flText = formatFlightLevels(n.lowerFl, n.upperFl);
     meta.textContent =
       formatNotamDate(n.start) + " \u2192 " + formatNotamDate(n.end) +
-      (flText ? "  \u00B7  " + flText : "");
+      (flText ? "  \u00B7  Height: " + flText : "");
 
     var body = document.createElement("div");
     body.className = "notam-text";
