@@ -699,11 +699,8 @@
   <div class="panel results" id="airstripPanel" style="display:none;">
     <h2>Advisory — unlicensed airstrips nearby <span class="count" id="airstripCount"></span></h2>
     <p class="advisory-note">
-      <strong>These are not restricted zones.</strong> Farm strips, gliding sites
-      and private helipads have no Flight Restriction Zone and there is nobody to
-      notify. They are listed only so you know light aircraft may be operating low
-      nearby. Positions are approximate and the data is crowd-sourced, so treat
-      this as a prompt to look around rather than a definitive list.
+      <strong>These are not restricted zones.</strong>This is not a definitive list. Positions are approximate and the data is
+      crowd-sourced from <a href="https://ourairports.com/data/" target="_blank" rel="noopener noreferrer">OurAirports</a>,
     </p>
     <div id="airstripList"></div>
   </div>
@@ -711,11 +708,10 @@
   <div class="panel results" id="notamPanel" style="display:none;">
     <h2>NOTAMs below 200m affecting this area <span class="count" id="notamCount"></span></h2>
     <div class="notam-warning">
-      <strong>Unofficial, best-effort.</strong> Sourced from NATS' contingency
-      briefing feed, not a purpose-built API. Filtered to NOTAMs starting at
-      or below 656ft (200m) - anything higher won't affect a UAS flying
-      beneath it, so it's left out. Trigger NOTAMs are valid for two weeks
-      only, and this data goes stale between updates - check
+      <strong>Unofficial, best-effort.</strong> Sourced from <a href="https://www.nats.aero/do-it-online/pre-flight-information-bulletins/" target="_blank" rel="noopener noreferrer">
+      NATS AIS Internet Briefing System Contingency</a>, not a purpose-built API.
+      Official but may be up to an hour out of date, not a substitute for a full briefing.
+      Filtered to NOTAMs starting at or below (120m). Check last update.
       <span id="notamDataAge"></span>. This is not a substitute for a proper
       pre-flight NOTAM briefing.
     </div>
