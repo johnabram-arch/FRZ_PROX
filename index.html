@@ -1960,9 +1960,19 @@ function initMap() {
   map = L.map("map").setView([54.5, -3.5], 6);  // rough centre of the UK
 
   // CARTO's basemap - served from a fast CDN and works reliably on
-  // most networks. it's still OpenStreetMap data underneath
+  // most networks. it's still OpenStreetMap data underneath.
+  //
+  // as of Aug 2026 CARTO requires a (free) API key on this raster tile
+  // endpoint - without one, tiles still load but are stamped with a
+  // repeated "API KEY REQUIRED" watermark. get one at
+  // carto.com/basemaps/apikey (free, ~5M tile requests/month) and put
+  // it here. the key works the same across all their raster styles,
+  // so this stays on light_all rather than switching to whatever style
+  // name appeared in the signup email.
+  var CARTO_API_KEY = "cb1_2gya_1_c80fc182dc167df411261f5d";
+
   var tiles = L.tileLayer(
-    "https://basemaps.cartocdn.com/light_all/{z}/{x}/{y}.png",
+    "https://basemaps.cartocdn.com/light_all/{z}/{x}/{y}.png?key=" + CARTO_API_KEY,
     {
       attribution: "&copy; OpenStreetMap contributors &copy; CARTO",
       maxZoom: 19
