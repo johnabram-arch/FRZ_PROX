@@ -712,7 +712,7 @@
       NATS AIS Internet Briefing System Contingency</a>, not a purpose-built API.
       Official but may be up to an hour out of date, not a substitute for a full briefing.
       Filtered to NOTAMs whose lower limit is at or below <span id="notamAltNote"></span>.
-      All times shown are UTC, as NOTAMs are always issued in UTC.
+      All times shown are UTC.
       <span id="notamDataAge"></span>. This is not a substitute for a proper
       pre-flight NOTAM briefing.
     </div>
@@ -722,12 +722,7 @@
   <div class="panel results" id="regionalNotamPanel" style="display:none;">
     <h2>Nationwide / regional notices <span class="count" id="regionalNotamCount"></span></h2>
     <div class="notam-warning">
-      These use a single point and a very large radius (nationwide or
-      FIR-wide) because the NOTAM format requires SOME location even
-      when the notice isn't about a specific place - security notices,
-      chart amendments, and similar. They apply everywhere in the UK
-      regardless of the coordinates you check, so they are listed once
-      here rather than repeated identically for every search.
+      National or FIR NOTAMS
     </div>
     <div id="regionalNotamList"></div>
   </div>
@@ -768,7 +763,7 @@ var NOTAM_FILE = "notam_data.json";
 // CHANGE THIS IN ONE PLACE ONLY. the headings and the warning text
 // below are generated from it, because they used to say 200m and 120m
 // in the same panel.
-var UAS_MAX_ALTITUDE_M = 120;
+var UAS_MAX_ALTITUDE_M = 121.92;
 var UAS_MAX_ALTITUDE_FT = Math.round(UAS_MAX_ALTITUDE_M / 0.3048);
 
 // where "numbers needed" suggestions get emailed
