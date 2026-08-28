@@ -2,3 +2,12 @@ working_files/
 __pycache__/
 *.pyc
 refresh_log.txt
+ATC_NUMBERS_1_2.py
+make_website_data.py
+prison_numbers.py
+pull_notams.py
+pull_tower_data.py
+push_to_github.py
+refresh_all.py
+run_refresh.bat
+setup_scheduled_task.ps1
