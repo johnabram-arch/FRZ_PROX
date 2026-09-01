@@ -1770,19 +1770,26 @@ function fillSuggestZones() {
 
 
 function openSuggestEmail(subject, body) {
-  var link = "mailto:" + SUGGEST_EMAIL +
-    "?subject=" + encodeURIComponent(subject) +
-    "&body=" + encodeURIComponent(body);
-
-  // some mail clients choke on very long mailto links
-  if (link.length > 1800) {
-    body = body.slice(0, 1200) + "\n\n[list truncated - too long for an email link]";
-    link = "mailto:" + SUGGEST_EMAIL +
-      "?subject=" + encodeURIComponent(subject) +
-      "&body=" + encodeURIComponent(body);
+  // Gmail's own web compose window, not mailto: - mailto hands off to
+  // whatever desktop client is registered (often Outlook, which most
+  // people using this tool don't have installed/configured). This opens
+  // gmail.com in a new tab instead, pre-filled and ready to send.
+  function gmailLink(subjectText, bodyText) {
+    return "https://mail.google.com/mail/?view=cm&fs=1" +
+      "&to=" + encodeURIComponent(SUGGEST_EMAIL) +
+      "&su=" + encodeURIComponent(subjectText) +
+      "&body=" + encodeURIComponent(bodyText);
   }
 
-  window.location.href = link;
+  var link = gmailLink(subject, body);
+
+  // Gmail's compose URL has its own practical length limit
+  if (link.length > 1800) {
+    body = body.slice(0, 1200) + "\n\n[list truncated - too long for an email link]";
+    link = gmailLink(subject, body);
+  }
+
+  window.open(link, "_blank");
 }
 
 
