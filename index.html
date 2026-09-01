@@ -422,6 +422,48 @@
     border: 1.5px solid var(--rule);
   }
 
+  .layer-toggles {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 10px;
+    margin-bottom: 14px;
+  }
+
+  .layer-toggle {
+    display: flex;
+    align-items: center;
+    gap: 7px;
+    font-family: 'IBM Plex Mono', monospace;
+    font-size: 12.5px;
+    color: var(--ink);
+    background: var(--paper);
+    border: 1.5px solid var(--rule);
+    border-radius: 20px;
+    padding: 6px 12px 6px 10px;
+    cursor: pointer;
+    user-select: none;
+  }
+
+  .layer-toggle:has(input:checked) {
+    border-color: var(--ink);
+    background: var(--paper-raised);
+  }
+
+  .layer-toggle input[type="checkbox"] {
+    width: 14px;
+    height: 14px;
+    margin: 0;
+    accent-color: var(--ink);
+    cursor: pointer;
+  }
+
+  .layer-toggle .toggle-swatch {
+    width: 11px;
+    height: 11px;
+    border-radius: 3px;
+    flex-shrink: 0;
+  }
+
   .map-legend {
     display: flex;
     flex-wrap: wrap;
@@ -665,6 +707,23 @@
 
   <div class="panel" id="mapPanel">
     <h2>Map</h2>
+    <div class="layer-toggles">
+      <label class="layer-toggle">
+        <input type="checkbox" id="toggleFrz" checked>
+        <span class="toggle-swatch" style="background: var(--restricted);"></span>
+        FRZ / RPZ
+      </label>
+      <label class="layer-toggle">
+        <input type="checkbox" id="toggleNsa" checked>
+        <span class="toggle-swatch" style="background: var(--ink-soft);"></span>
+        NSA
+      </label>
+      <label class="layer-toggle">
+        <input type="checkbox" id="toggleNotam" checked>
+        <span class="toggle-swatch" style="background: #C87A1E;"></span>
+        NOTAMs
+      </label>
+    </div>
     <div id="map"></div>
     <div class="map-legend">
       <span class="legend-item"><span class="legend-swatch dot-reference"></span>Reference point</span>
@@ -861,7 +920,14 @@ var towerIndex = {};  // base code (prefix+number, e.g. "4YG005") -> list of tow
 
 // the leaflet map - created the first time we need it, then reused
 var map = null;
-var mapLayers = [];  // everything we've drawn, so we can clear it before redrawing
+var mapLayers = [];  // reference marker + radius circle, so we can clear it before redrawing
+
+// each restriction type lives in its own Leaflet layer group so the
+// FRZ/NSA/NOTAM toggle checkboxes can show or hide a whole category at
+// once, independent of what's currently in view or being redrawn
+var frzLayerGroup = null;
+var nsaLayerGroup = null;
+var notamLayerGroup = null;
 
 // ---------------------------------------------------------------------------
 // load the tower data file as soon as the page opens
@@ -2005,9 +2071,59 @@ function initMap() {
 
   tiles.addTo(map);
 
+  // one layer group per restriction type. added to the map now (so
+  // they start "on"), then toggled on/off later by adding/removing the
+  // whole group - the shapes inside stay intact either way, so a
+  // toggle never has to re-run the search or redraw anything
+  frzLayerGroup = L.layerGroup().addTo(map);
+  nsaLayerGroup = L.layerGroup().addTo(map);
+  notamLayerGroup = L.layerGroup().addTo(map);
+
+  wireLayerToggles();
+
   // make sure leaflet has measured the container correctly once the
   // page has finished laying everything out
   setTimeout(function () { map.invalidateSize(); }, 200);
+}
+
+// ---------------------------------------------------------------------------
+// FRZ / NSA / NOTAM show-on-map toggles
+// ---------------------------------------------------------------------------
+// hides or shows a whole layer group. checked with hasLayer first
+// because calling addLayer twice or removeLayer on something already
+// gone doesn't error in Leaflet, but there's no reason to rely on that
+function setLayerGroupVisible(group, visible) {
+  if (!map || !group) {
+    return;
+  }
+  if (visible && !map.hasLayer(group)) {
+    map.addLayer(group);
+  } else if (!visible && map.hasLayer(group)) {
+    map.removeLayer(group);
+  }
+}
+
+function wireLayerToggles() {
+  var toggles = [
+    { id: "toggleFrz", group: function () { return frzLayerGroup; } },
+    { id: "toggleNsa", group: function () { return nsaLayerGroup; } },
+    { id: "toggleNotam", group: function () { return notamLayerGroup; } }
+  ];
+
+  var i = 0;
+  while (i < toggles.length) {
+    (function (t) {
+      var checkbox = document.getElementById(t.id);
+      if (!checkbox) {
+        return;
+      }
+      setLayerGroupVisible(t.group(), checkbox.checked);
+      checkbox.addEventListener("change", function () {
+        setLayerGroupVisible(t.group(), checkbox.checked);
+      });
+    })(toggles[i]);
+    i = i + 1;
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -2034,6 +2150,15 @@ function renderMap(refLat, refLon, normalResults, nsaResults, notamResults) {
     i = i + 1;
   }
   mapLayers = [];
+
+  // FRZ/NSA/NOTAM shapes live in their own groups (see initMap) so the
+  // toggle checkboxes work - clear each group rather than removing
+  // shapes from the map one-by-one. clearLayers() doesn't touch
+  // whether the group itself is currently shown or hidden, so a
+  // toggle switched off before a re-search stays off after it.
+  if (frzLayerGroup) frzLayerGroup.clearLayers();
+  if (nsaLayerGroup) nsaLayerGroup.clearLayers();
+  if (notamLayerGroup) notamLayerGroup.clearLayers();
 
   // the reference point itself
   var refMarker = L.marker([refLat, refLon]).addTo(map);
@@ -2075,7 +2200,8 @@ function renderMap(refLat, refLon, normalResults, nsaResults, notamResults) {
       color: fillColor,
       weight: result.inside ? 2.5 : 1.5,
       fillOpacity: result.inside ? 0.35 : 0.15
-    }).addTo(map);
+    });
+    (isNsa ? nsaLayerGroup : frzLayerGroup).addLayer(polygon);
 
     // same reasoning as renderResults - the name and phone are scraped
     // text, so they go in as textContent rather than concatenated HTML
@@ -2102,7 +2228,6 @@ function renderMap(refLat, refLon, normalResults, nsaResults, notamResults) {
     popup.appendChild(popupPhone);
 
     polygon.bindPopup(popup);
-    mapLayers.push(polygon);
   }
 
   var k = 0;
@@ -2143,7 +2268,7 @@ function renderMap(refLat, refLon, normalResults, nsaResults, notamResults) {
         color: color,
         weight: 2,
         fillOpacity: 0.2
-      }).addTo(map);
+      });
     } else {
       var bigCircle = notam.radiusM > OUTLINE_ONLY_RADIUS_M;
       shape = L.circle([notam.lat, notam.lon], {
@@ -2152,8 +2277,9 @@ function renderMap(refLat, refLon, normalResults, nsaResults, notamResults) {
         weight: bigCircle ? 1.5 : 2,
         fillOpacity: bigCircle ? 0 : 0.15,
         dashArray: bigCircle ? "6 6" : null
-      }).addTo(map);
+      });
     }
+    notamLayerGroup.addLayer(shape);
 
     var popup = document.createElement("div");
 
@@ -2176,7 +2302,6 @@ function renderMap(refLat, refLon, normalResults, nsaResults, notamResults) {
     popup.appendChild(popupText);
 
     shape.bindPopup(popup);
-    mapLayers.push(shape);
   }
 
   k = 0;
