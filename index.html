@@ -349,6 +349,37 @@
 
   .strip-name { font-size: 14px; }
 
+  /* the little category symbol at the start of each advisory row, and
+     the same symbol inside the map's layer toggle. shared so the two
+     can never drift apart visually */
+  .strip-symbol,
+  .strip-legend svg {
+    display: inline-block;
+    vertical-align: -5px;
+    margin-right: 7px;
+  }
+  .strip-symbol svg { display: block; }
+
+  .strip-legend {
+    display: inline-flex;
+    align-items: center;
+    font-size: 13px;
+  }
+
+  /* divIcon comes with a white box and a border by default */
+  .strip-marker {
+    background: none;
+    border: none;
+  }
+
+  /* leaflet's layer control, toned down to match the page */
+  .leaflet-control-layers {
+    border-radius: 3px;
+    font-family: inherit;
+  }
+  .leaflet-control-layers-list { padding: 4px 2px; }
+  .leaflet-control-layers label { margin-bottom: 2px; }
+
   .strip-dist {
     font-family: 'IBM Plex Mono', monospace;
     font-size: 13px;
@@ -420,48 +451,6 @@
     width: 100%;
     border-radius: 4px;
     border: 1.5px solid var(--rule);
-  }
-
-  .layer-toggles {
-    display: flex;
-    flex-wrap: wrap;
-    gap: 10px;
-    margin-bottom: 14px;
-  }
-
-  .layer-toggle {
-    display: flex;
-    align-items: center;
-    gap: 7px;
-    font-family: 'IBM Plex Mono', monospace;
-    font-size: 12.5px;
-    color: var(--ink);
-    background: var(--paper);
-    border: 1.5px solid var(--rule);
-    border-radius: 20px;
-    padding: 6px 12px 6px 10px;
-    cursor: pointer;
-    user-select: none;
-  }
-
-  .layer-toggle:has(input:checked) {
-    border-color: var(--ink);
-    background: var(--paper-raised);
-  }
-
-  .layer-toggle input[type="checkbox"] {
-    width: 14px;
-    height: 14px;
-    margin: 0;
-    accent-color: var(--ink);
-    cursor: pointer;
-  }
-
-  .layer-toggle .toggle-swatch {
-    width: 11px;
-    height: 11px;
-    border-radius: 3px;
-    flex-shrink: 0;
   }
 
   .map-legend {
@@ -707,23 +696,6 @@
 
   <div class="panel" id="mapPanel">
     <h2>Map</h2>
-    <div class="layer-toggles">
-      <label class="layer-toggle">
-        <input type="checkbox" id="toggleFrz" checked>
-        <span class="toggle-swatch" style="background: var(--restricted);"></span>
-        FRZ / RPZ
-      </label>
-      <label class="layer-toggle">
-        <input type="checkbox" id="toggleNsa" checked>
-        <span class="toggle-swatch" style="background: var(--ink-soft);"></span>
-        NSA
-      </label>
-      <label class="layer-toggle">
-        <input type="checkbox" id="toggleNotam" checked>
-        <span class="toggle-swatch" style="background: #C87A1E;"></span>
-        NOTAMs
-      </label>
-    </div>
     <div id="map"></div>
     <div class="map-legend">
       <span class="legend-item"><span class="legend-swatch dot-reference"></span>Reference point</span>
@@ -822,7 +794,9 @@
     <h2>Advisory — unlicensed airstrips nearby <span class="count" id="airstripCount"></span></h2>
     <p class="advisory-note">
       <strong>These are not restricted zones.</strong>This is not a definitive list. Positions are approximate and the data is
-      crowd-sourced from <a href="https://ourairports.com/data/" target="_blank" rel="noopener noreferrer">OurAirports</a>,
+      crowd-sourced from <a href="https://ourairports.com/data/" target="_blank" rel="noopener noreferrer">OurAirports</a>.
+      Each one is plotted on the map above; use the toggles on the map to
+      show or hide a category. Closed and disused fields start switched off.
     </p>
     <div id="airstripList"></div>
   </div>
@@ -865,15 +839,17 @@ var TOWER_FILE = "tower_data.json";
 var AIRSTRIP_FILE = "airstrip_data.json";
 var RADIUS_KM = 50;
 
-// advisory strips are only worth mentioning when they're close - 50 km
-// would list hundreds of them and drown out the actual restrictions.
+// this is read from advisory_radius_m in airstrip_data.json, which is
+// the single place it's configured. the value here is only a fallback
+// for an older data file that doesn't carry the field. the page used to
+// hard-code 5 km while the build script said 1 km, and neither knew
+// about the other.
 //
-// this is now read from advisory_radius_m in airstrip_data.json, which
-// is the single place it's configured. the value here is only a
-// fallback for an older data file that doesn't carry the field. the
-// page used to hard-code 5 km while the build script said 1 km, and
-// neither knew about the other.
-var AIRSTRIP_RADIUS_KM = 5;
+// now 50 km, the same as the main search radius, so the advisory list
+// covers the same ground as the legal zones. this makes the list long
+// in busy areas - that's what the map symbols and the layer toggles
+// are for.
+var AIRSTRIP_RADIUS_KM = 50;
 
 var NOTAM_FILE = "notam_data.json";
 
@@ -920,14 +896,14 @@ var towerIndex = {};  // base code (prefix+number, e.g. "4YG005") -> list of tow
 
 // the leaflet map - created the first time we need it, then reused
 var map = null;
-var mapLayers = [];  // reference marker + radius circle, so we can clear it before redrawing
+var mapLayers = [];  // everything we've drawn, so we can clear it before redrawing
 
-// each restriction type lives in its own Leaflet layer group so the
-// FRZ/NSA/NOTAM toggle checkboxes can show or hide a whole category at
-// once, independent of what's currently in view or being redrawn
-var frzLayerGroup = null;
-var nsaLayerGroup = null;
-var notamLayerGroup = null;
+// the advisory-airstrip layer control. kept separate from mapLayers
+// because a leaflet Control is removed with removeControl(), not
+// removeLayer() - passing one to removeLayer() silently does nothing
+// and you end up with a stack of duplicate controls after a few
+// searches
+var airstripControl = null;
 
 // ---------------------------------------------------------------------------
 // load the tower data file as soon as the page opens
@@ -1753,7 +1729,8 @@ function runCheck() {
 
   renderResults("frzPanel", "frzList", "frzCount", normalResults);
   renderResults("nsaPanel", "nsaList", "nsaCount", nsaResults);
-  renderAirstrips(findNearbyAirstrips(refLat, refLon));
+  var nearbyAirstrips = findNearbyAirstrips(refLat, refLon);
+  renderAirstrips(nearbyAirstrips);
   var relevantNotams = findRelevantNotams(refLat, refLon);
   renderNotams(relevantNotams);
   renderMissingNumbers(normalResults, nsaResults);
@@ -1762,7 +1739,7 @@ function runCheck() {
   // the map goes last and is wrapped up safely - if anything goes wrong
   // drawing it, the results and copy lists above must still work
   try {
-    renderMap(refLat, refLon, normalResultsForMap, nsaResultsForMap, relevantNotams);
+    renderMap(refLat, refLon, normalResultsForMap, nsaResultsForMap, relevantNotams, nearbyAirstrips);
   } catch (error) {
     console.error("could not draw the map:", error);
     var mapStatus = document.getElementById("statusLine");
@@ -2071,70 +2048,32 @@ function initMap() {
 
   tiles.addTo(map);
 
-  // one layer group per restriction type. added to the map now (so
-  // they start "on"), then toggled on/off later by adding/removing the
-  // whole group - the shapes inside stay intact either way, so a
-  // toggle never has to re-run the search or redraw anything
-  frzLayerGroup = L.layerGroup().addTo(map);
-  nsaLayerGroup = L.layerGroup().addTo(map);
-  notamLayerGroup = L.layerGroup().addTo(map);
-
-  wireLayerToggles();
-
   // make sure leaflet has measured the container correctly once the
   // page has finished laying everything out
   setTimeout(function () { map.invalidateSize(); }, 200);
 }
 
 // ---------------------------------------------------------------------------
-// FRZ / NSA / NOTAM show-on-map toggles
-// ---------------------------------------------------------------------------
-// hides or shows a whole layer group. checked with hasLayer first
-// because calling addLayer twice or removeLayer on something already
-// gone doesn't error in Leaflet, but there's no reason to rely on that
-function setLayerGroupVisible(group, visible) {
-  if (!map || !group) {
-    return;
-  }
-  if (visible && !map.hasLayer(group)) {
-    map.addLayer(group);
-  } else if (!visible && map.hasLayer(group)) {
-    map.removeLayer(group);
-  }
-}
-
-function wireLayerToggles() {
-  var toggles = [
-    { id: "toggleFrz", group: function () { return frzLayerGroup; } },
-    { id: "toggleNsa", group: function () { return nsaLayerGroup; } },
-    { id: "toggleNotam", group: function () { return notamLayerGroup; } }
-  ];
-
-  var i = 0;
-  while (i < toggles.length) {
-    (function (t) {
-      var checkbox = document.getElementById(t.id);
-      if (!checkbox) {
-        return;
-      }
-      setLayerGroupVisible(t.group(), checkbox.checked);
-      checkbox.addEventListener("change", function () {
-        setLayerGroupVisible(t.group(), checkbox.checked);
-      });
-    })(toggles[i]);
-    i = i + 1;
-  }
-}
-
-// ---------------------------------------------------------------------------
 // the map - reference point, 50km radius, and the zone shapes themselves
 // ---------------------------------------------------------------------------
-function renderMap(refLat, refLon, normalResults, nsaResults, notamResults) {
+function renderMap(refLat, refLon, normalResults, nsaResults, notamResults, airstripResults) {
   notamResults = notamResults || [];
+  airstripResults = airstripResults || [];
   // if the map failed to start up there's nothing to draw on
   if (map === null) {
     console.warn("no map to draw on - initMap() must have failed");
     return;
+  }
+
+  // the layer control from the previous search. a Control is not a
+  // Layer, so the mapLayers loop below can't clear it
+  if (airstripControl !== null) {
+    try {
+      map.removeControl(airstripControl);
+    } catch (error) {
+      console.warn("could not remove the old airstrip control:", error);
+    }
+    airstripControl = null;
   }
 
   // clear anything drawn by a previous search. wrapped in a try in case
@@ -2150,15 +2089,6 @@ function renderMap(refLat, refLon, normalResults, nsaResults, notamResults) {
     i = i + 1;
   }
   mapLayers = [];
-
-  // FRZ/NSA/NOTAM shapes live in their own groups (see initMap) so the
-  // toggle checkboxes work - clear each group rather than removing
-  // shapes from the map one-by-one. clearLayers() doesn't touch
-  // whether the group itself is currently shown or hidden, so a
-  // toggle switched off before a re-search stays off after it.
-  if (frzLayerGroup) frzLayerGroup.clearLayers();
-  if (nsaLayerGroup) nsaLayerGroup.clearLayers();
-  if (notamLayerGroup) notamLayerGroup.clearLayers();
 
   // the reference point itself
   var refMarker = L.marker([refLat, refLon]).addTo(map);
@@ -2200,8 +2130,7 @@ function renderMap(refLat, refLon, normalResults, nsaResults, notamResults) {
       color: fillColor,
       weight: result.inside ? 2.5 : 1.5,
       fillOpacity: result.inside ? 0.35 : 0.15
-    });
-    (isNsa ? nsaLayerGroup : frzLayerGroup).addLayer(polygon);
+    }).addTo(map);
 
     // same reasoning as renderResults - the name and phone are scraped
     // text, so they go in as textContent rather than concatenated HTML
@@ -2228,6 +2157,7 @@ function renderMap(refLat, refLon, normalResults, nsaResults, notamResults) {
     popup.appendChild(popupPhone);
 
     polygon.bindPopup(popup);
+    mapLayers.push(polygon);
   }
 
   var k = 0;
@@ -2268,7 +2198,7 @@ function renderMap(refLat, refLon, normalResults, nsaResults, notamResults) {
         color: color,
         weight: 2,
         fillOpacity: 0.2
-      });
+      }).addTo(map);
     } else {
       var bigCircle = notam.radiusM > OUTLINE_ONLY_RADIUS_M;
       shape = L.circle([notam.lat, notam.lon], {
@@ -2277,9 +2207,8 @@ function renderMap(refLat, refLon, normalResults, nsaResults, notamResults) {
         weight: bigCircle ? 1.5 : 2,
         fillOpacity: bigCircle ? 0 : 0.15,
         dashArray: bigCircle ? "6 6" : null
-      });
+      }).addTo(map);
     }
-    notamLayerGroup.addLayer(shape);
 
     var popup = document.createElement("div");
 
@@ -2302,12 +2231,107 @@ function renderMap(refLat, refLon, normalResults, nsaResults, notamResults) {
     popup.appendChild(popupText);
 
     shape.bindPopup(popup);
+    mapLayers.push(shape);
   }
 
   k = 0;
   while (k < notamResults.length) {
     drawNotam(notamResults[k]);
     k = k + 1;
+  }
+
+  // -------------------------------------------------------------------
+  // advisory airstrips - one marker each, grouped by category so each
+  // group can be switched off independently.
+  //
+  // these are drawn LAST so their markers sit above the zone polygons
+  // and stay clickable. they are advisory only: nothing here is a
+  // restriction, which is why they're plain markers rather than shapes
+  // with an area.
+  // -------------------------------------------------------------------
+  var stripGroups = {};
+
+  var s = 0;
+  while (s < airstripResults.length) {
+    var strip = airstripResults[s];
+    var category = strip.category || "airstrip";
+
+    if (!stripGroups[category]) {
+      stripGroups[category] = L.layerGroup();
+    }
+
+    var marker = L.marker([strip.lat, strip.lon], {
+      icon: stripIcon(category),
+      // below the reference-point pin, above the polygons
+      zIndexOffset: 200
+    });
+
+    // built as elements, not concatenated HTML - the names are
+    // crowd-sourced and go in as text, same as everywhere else
+    var stripPopup = document.createElement("div");
+
+    var stripName = document.createElement("b");
+    stripName.textContent = strip.name;
+    stripPopup.appendChild(stripName);
+    stripPopup.appendChild(document.createElement("br"));
+
+    var stripKind = document.createElement("span");
+    stripKind.style.color = "#6B6558";
+    stripKind.textContent = strip.kind.replace(/_/g, " ");
+    stripPopup.appendChild(stripKind);
+    stripPopup.appendChild(document.createElement("br"));
+
+    var stripDist = document.createElement("span");
+    stripDist.textContent =
+      strip.dist.toFixed(1) + " km  " +
+      String(Math.round(strip.bearing) % 360).padStart(3, "0") + "\u00B0";
+    stripPopup.appendChild(stripDist);
+
+    var stripNote = document.createElement("div");
+    stripNote.className = "map-popup-phone";
+    stripNote.textContent = "Advisory only - not a restricted zone";
+    stripPopup.appendChild(stripNote);
+
+    marker.bindPopup(stripPopup);
+    stripGroups[category].addLayer(marker);
+
+    s = s + 1;
+  }
+
+  // build the toggle control. only categories that actually turned up
+  // in this search get a row - a permanent list of five with four of
+  // them empty is just noise
+  var overlays = {};
+  var haveAnyStrips = false;
+
+  var c = 0;
+  while (c < CATEGORY_ORDER.length) {
+    var cat = CATEGORY_ORDER[c];
+    var group = stripGroups[cat];
+
+    if (group) {
+      haveAnyStrips = true;
+
+      var count = group.getLayers().length;
+      var label = '<span class="strip-legend">' + stripIconSvg(cat) +
+                  CATEGORY_LABELS[cat] + " (" + count + ")</span>";
+
+      overlays[label] = group;
+      mapLayers.push(group);
+
+      if (CATEGORY_ON_BY_DEFAULT[cat]) {
+        group.addTo(map);
+      }
+    }
+
+    c = c + 1;
+  }
+
+  if (haveAnyStrips) {
+    airstripControl = L.control.layers(null, overlays, {
+      collapsed: false,
+      position: "topright"
+    }).addTo(map);
   }
 
   // zoom to fit the search radius.
@@ -2328,22 +2352,172 @@ function renderMap(refLat, refLon, normalResults, nsaResults, notamResults) {
 // ---------------------------------------------------------------------------
 // advisory airstrips - simple distance to a point, no ring maths needed
 // ---------------------------------------------------------------------------
+
+// which symbol a strip gets on the map. the build script writes a
+// "kind" straight from OurAirports' type column, but that column alone
+// isn't enough: RAF stations are typed as ordinary small/medium
+// airports like anywhere else, so the name has to be checked too.
+//
+// order matters. military is tested first and beats the type.
+var MILITARY_NAME_RE = /(^|[^a-z])(raf|rnas|rafc|usaf|usaaf|mod|army|aac|military|air force|airbase|air base|barracks|garrison|ranges?)([^a-z]|$)/i;
+
+function stripCategory(strip) {
+  var name = strip.name || "";
+  var kind = (strip.kind || "").toLowerCase();
+
+  // word-boundary match, not a substring one. "mod" as a substring
+  // would make a military base out of Modbury and Bodmin
+  if (MILITARY_NAME_RE.test(name)) {
+    return "military";
+  }
+
+  if (kind === "closed") {
+    return "closed";
+  }
+
+  if (kind === "heliport") {
+    return "helipad";
+  }
+
+  // some pads are typed as small_airport but are plainly a helipad by
+  // name - hospital pads especially
+  var lower = name.toLowerCase();
+  if (lower.indexOf("helipad") >= 0 ||
+      lower.indexOf("heliport") >= 0 ||
+      lower.indexOf("hospital") >= 0) {
+    return "helipad";
+  }
+
+  if (kind === "seaplane_base" || kind === "balloonport") {
+    return "other";
+  }
+
+  return "airstrip";
+}
+
+// display name and colour per category. CATEGORY_ORDER is also the
+// order the toggles appear in
+var CATEGORY_ORDER = ["military", "airstrip", "helipad", "other", "closed"];
+
+var CATEGORY_LABELS = {
+  military: "Military airfields",
+  airstrip: "Airstrips &amp; airfields",
+  helipad: "Helipads",
+  other: "Seaplane / balloon",
+  closed: "Closed / disused"
+};
+
+// closed fields start switched off. there are a lot of them, most are
+// a field with a faint outline of a WWII runway in it, and having them
+// on by default buries the strips that are actually in use. the toggle
+// is right there if you want them.
+var CATEGORY_ON_BY_DEFAULT = {
+  military: true,
+  airstrip: true,
+  helipad: true,
+  other: true,
+  closed: false
+};
+
+// the symbols themselves - inline SVG in a divIcon, so there are no
+// image files to host and they stay sharp on a retina screen.
+//
+// these are REPRESENTATIVE symbols, not ICAO chart symbology. they are
+// meant to be told apart at a glance on a busy map, nothing more.
+function stripIconSvg(category) {
+  if (category === "military") {
+    // roundel - concentric rings. reads as "military airfield" to
+    // anyone in the UK without needing a legend
+    return '<svg viewBox="0 0 22 22" width="22" height="22">' +
+           '<circle cx="11" cy="11" r="9" fill="#1B2A4A"/>' +
+           '<circle cx="11" cy="11" r="5.5" fill="#F7F5F0"/>' +
+           '<circle cx="11" cy="11" r="2.5" fill="#C81E4B"/>' +
+           '</svg>';
+  }
+
+  if (category === "helipad") {
+    // circled H
+    return '<svg viewBox="0 0 22 22" width="22" height="22">' +
+           '<circle cx="11" cy="11" r="8.5" fill="#F7F5F0" stroke="#2E6B4F" stroke-width="2"/>' +
+           '<path d="M8 6.5v9M14 6.5v9M8 11h6" stroke="#2E6B4F" stroke-width="2" ' +
+           'fill="none" stroke-linecap="round"/>' +
+           '</svg>';
+  }
+
+  if (category === "other") {
+    // diamond - seaplane bases and balloon sites, too few to justify a
+    // symbol each
+    return '<svg viewBox="0 0 22 22" width="22" height="22">' +
+           '<path d="M11 2.5 19.5 11 11 19.5 2.5 11Z" fill="#F7F5F0" ' +
+           'stroke="#4A5A78" stroke-width="2"/>' +
+           '</svg>';
+  }
+
+  if (category === "closed") {
+    // crossed-out circle, deliberately faint
+    return '<svg viewBox="0 0 22 22" width="22" height="22" opacity="0.55">' +
+           '<circle cx="11" cy="11" r="8" fill="none" stroke="#8B8578" stroke-width="1.8"/>' +
+           '<path d="M6 6l10 10M16 6L6 16" stroke="#8B8578" stroke-width="1.8" ' +
+           'stroke-linecap="round"/>' +
+           '</svg>';
+  }
+
+  // default: airstrip - a circle with a runway bar across it
+  return '<svg viewBox="0 0 22 22" width="22" height="22">' +
+         '<circle cx="11" cy="11" r="8.5" fill="#F7F5F0" stroke="#4A5A78" stroke-width="2"/>' +
+         '<path d="M6.5 14.5 15.5 7.5" stroke="#4A5A78" stroke-width="2.4" ' +
+         'stroke-linecap="round"/>' +
+         '</svg>';
+}
+
+// leaflet icons are immutable once built, so build each one once and
+// reuse it across every marker of that category rather than making a
+// fresh object several hundred times per search
+var stripIconCache = {};
+
+function stripIcon(category) {
+  if (!stripIconCache[category]) {
+    stripIconCache[category] = L.divIcon({
+      className: "strip-marker",
+      html: stripIconSvg(category),
+      iconSize: [22, 22],
+      iconAnchor: [11, 11],
+      popupAnchor: [0, -10]
+    });
+  }
+  return stripIconCache[category];
+}
+
 function findNearbyAirstrips(refLat, refLon) {
   var found = [];
+
+  // the box pre-filter has to be wider than the search radius or it
+  // throws away strips the radius should have caught. at 50 km that
+  // needs roughly 0.45 deg of latitude and, at UK latitudes where a
+  // degree of longitude is about 62 km, 0.85 deg of longitude. these
+  // are rounded up for margin - the real distance check below is what
+  // actually decides
+  var latBox = (AIRSTRIP_RADIUS_KM / 111) + 0.05;
+  var lonBox = (AIRSTRIP_RADIUS_KM / 55) + 0.05;
 
   var i = 0;
   while (i < allAirstrips.length) {
     var strip = allAirstrips[i];
 
-    // cheap box check first so we're not running vincenty 1100 times.
-    // 0.1 deg of latitude is about 11 km, comfortably wider than the
-    // 5 km we care about
-    if (Math.abs(strip.lat - refLat) < 0.1 && Math.abs(strip.lon - refLon) < 0.18) {
+    if (Math.abs(strip.lat - refLat) < latBox && Math.abs(strip.lon - refLon) < lonBox) {
       var result = vincentyDistanceAndBearing(refLat, refLon, strip.lat, strip.lon);
       var distKm = result[0] / 1000;
 
       if (distKm <= AIRSTRIP_RADIUS_KM) {
-        found.push({ name: strip.name, dist: distKm, bearing: result[1] });
+        found.push({
+          name: strip.name,
+          lat: strip.lat,
+          lon: strip.lon,
+          kind: strip.kind || "unknown",
+          category: stripCategory(strip),
+          dist: distKm,
+          bearing: result[1]
+        });
       }
     }
 
@@ -2393,7 +2567,18 @@ function renderAirstrips(strips) {
 
     var nameCell = document.createElement("div");
     nameCell.className = "strip-name";
-    nameCell.textContent = strip.name;  // textContent - these names are crowd-sourced
+
+    // the same symbol the map uses, so a row and a marker are obviously
+    // the same thing. innerHTML is safe here - it's our own fixed SVG
+    // string, and the crowd-sourced name still goes in as text below
+    var symbol = document.createElement("span");
+    symbol.className = "strip-symbol";
+    symbol.innerHTML = stripIconSvg(strip.category || "airstrip");
+    nameCell.appendChild(symbol);
+
+    var nameText = document.createElement("span");
+    nameText.textContent = strip.name;  // textContent - these names are crowd-sourced
+    nameCell.appendChild(nameText);
 
     var distCell = document.createElement("div");
     distCell.className = "strip-dist";
