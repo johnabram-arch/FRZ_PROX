@@ -731,6 +731,17 @@
         <label for="coordsInput">Coordinates (lat, long)</label>
         <input type="text" id="coordsInput" placeholder="e.g. 51.219004, -0.147814">
       </div>
+      <div class="field" style="flex: 0 0 140px; min-width: 120px;">
+        <label for="radiusSelect">Search radius</label>
+        <select id="radiusSelect">
+          <option value="10">10 km</option>
+          <option value="25">25 km</option>
+          <option value="50" selected>50 km</option>
+          <option value="100">100 km</option>
+          <option value="150">150 km</option>
+          <option value="200">200 km</option>
+        </select>
+      </div>
       <button class="btn-secondary" id="locateBtn">Use my location</button>
       <button class="btn-primary" id="checkBtn">Check</button>
     </div>
@@ -3355,6 +3366,16 @@ document.getElementById("checkBtn").addEventListener("click", runCheck);
 document.getElementById("locateBtn").addEventListener("click", useMyLocation);
 document.getElementById("coordsInput").addEventListener("keydown", function (e) {
   if (e.key === "Enter") runCheck();
+});
+
+// radius is a plain module-level var read by runCheck() and the map -
+// changing the dropdown updates it and, if a search has already been
+// run, re-runs it immediately so the results/map reflect the new radius
+document.getElementById("radiusSelect").addEventListener("change", function () {
+  RADIUS_KM = parseFloat(this.value);
+  if (document.getElementById("coordsInput").value.trim() !== "") {
+    runCheck();
+  }
 });
 
 document.getElementById("towerFindBtn").addEventListener("click", runTowerFind);
